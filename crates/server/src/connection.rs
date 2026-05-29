@@ -2407,6 +2407,84 @@ mod encryption_tests {
     /// Drive a simulated 1.19.4 (protocol 762) client: handshake → login → play
     /// directly (no Configuration phase), verifying the Join Game body is
     /// rewritten to the 1.19.4 layout (codec inline, no portalCooldown).
+    /// Drive a simulated 1.19.2 (protocol 760) client and verify the semantic
+    /// player_info downgrade: 1.20.1's action-bitmask Player Info Update is
+    /// converted to 1.19.2's enum-action Player Info `add_player` form, parsed
+    /// back here to confirm it is well-formed.
+    #[tokio::test]
+    async fn version_760_player_info_downgrade() {
+        let probe = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = probe.local_addr().unwrap().port();
+        drop(probe);
+
+        let mut config = Config::default();
+        config.server.host = "127.0.0.1".into();
+        config.server.port = port;
+        config.server.compression_threshold = -1;
+        config.server.online_mode = false;
+        config.server.view_distance = 2;
+        config.control.enabled = false;
+        config.mods.enabled = false;
+        config.world.save = false;
+        config.world.generator = "flat".into();
+        tokio::spawn(async move {
+            let _ = crate::run(config).await;
+        });
+        tokio::time::sleep(Duration::from_millis(400)).await;
+
+        let mut conn = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        let mut hs = BytesMut::new();
+        hs.write_varint(0x00);
+        hs.write_varint(760);
+        hs.write_string("127.0.0.1");
+        hs.write_u16(port);
+        hs.write_varint(2);
+        write_frame(&mut conn, &hs, None).await;
+        let mut ls = BytesMut::new();
+        ls.write_varint(0x00);
+        ls.write_string("V760");
+        ls.write_bool(false);
+        write_frame(&mut conn, &ls, None).await;
+
+        let (id, _b) = read_frame(&mut conn, None).await;
+        assert_eq!(id, 0x02, "expected Login Success");
+
+        // The 1.19.2 wire ids: Join Game 0x25, Player Info 0x37.
+        let mut saw_join = false;
+        let mut saw_player_info = false;
+        for _ in 0..60 {
+            let (pid, mut body) = read_frame(&mut conn, None).await;
+            if pid == 0x25 {
+                saw_join = true;
+            } else if pid == 0x37 {
+                // Parse the 1.19.2 player_info add form.
+                let action = body.read_varint().unwrap();
+                assert_eq!(action, 0, "expected add_player action");
+                let count = body.read_varint().unwrap();
+                assert!(count >= 1);
+                let _uuid = body.read_uuid().unwrap();
+                let name = body.read_string().unwrap();
+                assert!(!name.is_empty());
+                let props = body.read_varint().unwrap();
+                for _ in 0..props {
+                    let _ = body.read_string().unwrap();
+                    let _ = body.read_string().unwrap();
+                    if body.read_bool().unwrap() {
+                        let _ = body.read_string().unwrap();
+                    }
+                }
+                let _gamemode = body.read_varint().unwrap();
+                let _ping = body.read_varint().unwrap();
+                let _has_display = body.read_bool().unwrap();
+                let _has_crypto = body.read_bool().unwrap();
+                saw_player_info = true;
+                break;
+            }
+        }
+        assert!(saw_join, "did not receive a 760 Join Game");
+        assert!(saw_player_info, "did not receive a converted 760 Player Info");
+    }
+
     /// Drive a simulated 1.20.4 (protocol 765) client through the Configuration
     /// phase into play, verifying the 1.20.3/4 translation path (id map + 764-style
     /// body rewrites + JSON→NBT chat).

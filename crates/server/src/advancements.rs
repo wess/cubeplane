@@ -79,7 +79,9 @@ const TREE: &[Node] = &[
 /// encodes advancement display text as NBT, which this builder doesn't yet
 /// produce, so we skip the (cosmetic) tree for those versions.
 pub fn supported(protocol: i32) -> bool {
-    (761..=764).contains(&protocol)
+    // 1.19.2–1.20.2 use a JSON-string display title with the criteria array
+    // (telemetry only from 1.20); 1.20.3+ switched to NBT text (not yet emitted).
+    (760..=764).contains(&protocol)
 }
 
 /// The criterion name for an advancement (the key's last path segment).
