@@ -16,6 +16,7 @@ use rand::Rng;
 use cubeplane_mods::ModEvent;
 use cubeplane_protocol::{ProtoRead, ProtoWrite, RawPacket, PROTOCOL_VERSION};
 
+use crate::advancements;
 use crate::ai::{self, Turn};
 use crate::clientbound as cb;
 use crate::codec::{read_frame, write_frame, EncryptedReader, EncryptedWriter, NO_COMPRESSION};
@@ -298,6 +299,11 @@ where
         player.send(cb::set_experience(combat::xp_bar(s.xp_total), s.xp_total / 10, s.xp_total));
     }
     player.sync_inventory();
+    // Define the advancement tree (with any progress restored this session).
+    {
+        let earned = shared.earned_advancements(player.entity_id);
+        player.send(advancements::packet(&earned));
+    }
     player.send(cb::declare_commands(&[
         ("help", false), ("list", false), ("pos", false), ("tp", true),
         ("gamemode", true), ("give", true), ("time", true), ("weather", true),
@@ -396,6 +402,7 @@ where
     shared.remove_player(entity_id);
     shared.clear_effects(entity_id);
     shared.clear_stats(entity_id);
+    shared.clear_advancements(entity_id);
     shared.broadcast(cb::player_info_remove(&[uuid]));
     shared.broadcast(cb::remove_entities(&[entity_id]));
     let leave_msg = text::system_notice(format!("{name} left the cubeplane"));
@@ -871,6 +878,16 @@ fn respawn_player(
     broadcast_move(shared, player);
 }
 
+/// Award the advancement for a milestone event, popping a toast if newly earned.
+fn award_advancement(shared: &Arc<Shared>, player: &Player, event: &str) {
+    if let Some(key) = advancements::key_for_event(event) {
+        if shared.earn_advancement(player.entity_id, key) {
+            let earned = shared.earned_advancements(player.entity_id);
+            player.send(advancements::packet(&earned));
+        }
+    }
+}
+
 /// The 16 dye colours, indexed to match sheep wool variants and `*_wool` items.
 const WOOL_COLORS: [&str; 16] = [
     "white", "orange", "magenta", "light_blue", "yellow", "lime", "pink", "gray", "light_gray",
@@ -1205,6 +1222,7 @@ fn do_trade(shared: &Arc<Shared>, player: &Player, index: i32) {
     });
     if traded {
         shared.use_trade(villager, index as usize, offers.len());
+        award_advancement(shared, player, "trade");
         // Each trade grants the villager XP, which can raise its level.
         let new_level = shared.add_villager_xp(villager, 5);
         player.sync_inventory();
@@ -1920,6 +1938,7 @@ fn break_block(shared: &Arc<Shared>, player: &Player, x: i32, y: i32, z: i32, cr
     // Record the mined-block statistic (by block registry id).
     if !cubeplane_world::block::is_air(previous) {
         shared.stat_block_mined(player.entity_id, cubeplane_world::block::block_id(previous));
+        award_advancement(shared, player, "mine");
     }
 
     // Breaking a chest spills its contents and removes the block entity.

@@ -78,6 +78,13 @@ pub fn tick(shared: &Arc<Shared>, tick: u64, is_night: bool) {
                 if let Some((p, _)) = nearest_player(&players, mob.x, mob.z) {
                     combat::grant_xp(&p, xp);
                     shared.stat_mob_killed(p.entity_id, mob.kind.type_id());
+                    // "Monster Hunter": award on a hostile kill, popping a toast.
+                    if mob.kind.hostile()
+                        && shared.earn_advancement(p.entity_id, "cubeplane:kill")
+                    {
+                        let earned = shared.earned_advancements(p.entity_id);
+                        p.send(crate::advancements::packet(&earned));
+                    }
                 }
                 continue;
             }

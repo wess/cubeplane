@@ -132,6 +132,8 @@ pub struct Shared {
     /// Per-player statistics: blocks mined (by block id) and mobs killed (by
     /// entity-type id), keyed by player entity id.
     stats: RwLock<HashMap<i32, PlayerStats>>,
+    /// Advancement keys each player has earned, keyed by player entity id.
+    advancements: RwLock<HashMap<i32, HashSet<&'static str>>>,
     started: Instant,
 }
 
@@ -172,6 +174,7 @@ impl Shared {
             trade_uses: RwLock::new(HashMap::new()),
             villager_xp: RwLock::new(HashMap::new()),
             stats: RwLock::new(HashMap::new()),
+            advancements: RwLock::new(HashMap::new()),
             mods,
             server_key,
             started: Instant::now(),
@@ -692,6 +695,26 @@ impl Shared {
     /// Drop a player's statistics (on disconnect).
     pub fn clear_stats(&self, player: i32) {
         self.stats.write().unwrap().remove(&player);
+    }
+
+    /// Award an advancement to a player, returning true if it was newly earned.
+    pub fn earn_advancement(&self, player: i32, key: &'static str) -> bool {
+        self.advancements.write().unwrap().entry(player).or_default().insert(key)
+    }
+
+    /// The advancement keys a player has earned.
+    pub fn earned_advancements(&self, player: i32) -> Vec<&'static str> {
+        self.advancements
+            .read()
+            .unwrap()
+            .get(&player)
+            .map(|s| s.iter().copied().collect())
+            .unwrap_or_default()
+    }
+
+    /// Drop a player's advancement progress (on disconnect).
+    pub fn clear_advancements(&self, player: i32) {
+        self.advancements.write().unwrap().remove(&player);
     }
 
     /// A villager's current trade level (1 = novice … 5 = master).

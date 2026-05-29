@@ -17,7 +17,7 @@ use crate::registry;
 
 /// Write an item stack in the `slot` wire format, including a `Damage` tag for
 /// damaged tools.
-fn write_slot(b: &mut BytesMut, stack: ItemStack) {
+pub(crate) fn write_slot(b: &mut BytesMut, stack: ItemStack) {
     if stack.is_empty() {
         b.write_bool(false);
     } else {
@@ -47,7 +47,7 @@ fn write_slot(b: &mut BytesMut, stack: ItemStack) {
 }
 
 /// Start a payload buffer with the given packet id.
-fn pkt(id: i32) -> BytesMut {
+pub(crate) fn pkt(id: i32) -> BytesMut {
     let mut buf = BytesMut::new();
     buf.write_varint(id);
     buf

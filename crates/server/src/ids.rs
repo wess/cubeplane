@@ -64,6 +64,8 @@ pub mod play_cb {
     pub const SOUND_EFFECT: i32 = 0x62;
     pub const TAB_LIST_HEADER: i32 = 0x65;
     pub const COLLECT: i32 = 0x67;
+    /// Update Advancements — follows ENTITY_TELEPORT (0x68) in the 1.20.1 order.
+    pub const UPDATE_ADVANCEMENTS: i32 = 0x69;
     pub const ENTITY_EFFECT: i32 = 0x6c;
     pub const ACKNOWLEDGE_BLOCK_CHANGE: i32 = 0x06;
     pub const BLOCK_UPDATE: i32 = 0x0a;
