@@ -504,6 +504,7 @@ async fn play_loop<R: AsyncRead + Unpin>(
             Play::BlockPlace { x, y, z, face, sequence } => {
                 // Interacting with a lever/chest/sign takes priority over placing.
                 if !try_flint(shared, player, x, y, z, face)
+                    && !try_bonemeal(shared, player, x, y, z)
                     && !try_toggle_lever(shared, player, x, y, z)
                     && !try_use_button(shared, player, x, y, z)
                     && !try_use_door(shared, player, x, y, z)
@@ -1356,6 +1357,29 @@ fn try_use_bed(shared: &Arc<Shared>, player: &Player, x: i32, y: i32, z: i32) ->
         shared.broadcast(cb::update_time(0, 1000));
         shared.broadcast(cb::system_chat(&text::colored(format!("{} slept; good morning!", player.name), "yellow"), false));
     }
+    true
+}
+
+/// Use bone meal on a crop, sapling or grass block. Returns true if applied.
+fn try_bonemeal(shared: &Arc<Shared>, player: &Player, x: i32, y: i32, z: i32) -> bool {
+    let held = player.inventory(|i| i.held(player.state().held_slot));
+    if item::name_of(held.id) != Some("bone_meal") {
+        return false;
+    }
+    // Only overworld blocks run the growth simulation.
+    if player.state().dimension != 0 {
+        return false;
+    }
+    if !crate::sim::apply_bonemeal(shared, x, y, z) {
+        // Not a bonemeal-able block: let other handlers / placement run.
+        return false;
+    }
+    if player.gamemode() != 1 {
+        let slot = player.state().held_slot;
+        let after = player.inventory(|i| i.consume_held(slot));
+        player.set_slot(crate::inventory::HOTBAR_START + slot as usize, after);
+    }
+    shared.broadcast(cb::sound_effect("item.bone_meal.use", 0, x as f64 + 0.5, y as f64 + 0.5, z as f64 + 0.5, 1.0, 1.0));
     true
 }
 

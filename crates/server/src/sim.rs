@@ -82,6 +82,57 @@ fn is_crop(name: &str) -> bool {
     matches!(name, "wheat" | "carrots" | "potatoes" | "beetroots" | "nether_wart")
 }
 
+/// Apply bone meal at a position. Crops jump several growth stages, saplings try
+/// to grow into trees, and grass blocks sprout grass/flowers nearby. Returns
+/// true if the bone meal had an effect (and should be consumed).
+pub fn apply_bonemeal(shared: &Arc<Shared>, x: i32, y: i32, z: i32) -> bool {
+    let state = get(shared, x, y, z);
+    let name = block::name_of(state);
+
+    // Crops advance a few stages (clamped to maturity).
+    if is_crop(name) {
+        if let (Some(age), Some(max)) = (block::prop_index(state, "age"), block::prop_values(state, "age")) {
+            if age + 1 < max as u32 {
+                let grown = (age + rand::thread_rng().gen_range(2..=5)).min(max as u32 - 1);
+                set(shared, x, y, z, block::with_prop(state, "age", grown));
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // Saplings have a chance to immediately become a tree.
+    if name.ends_with("_sapling") {
+        grow_tree(shared, x, y, z, name);
+        return true;
+    }
+
+    // Grass blocks sprout short grass and the occasional flower on bare ground.
+    if name == "grass_block" {
+        let mut rng = rand::thread_rng();
+        let grass = block::state_by_name("short_grass").or_else(|| block::state_by_name("grass"));
+        let mut placed = false;
+        for _ in 0..16 {
+            let (dx, dz) = (rng.gen_range(-3..=3), rng.gen_range(-3..=3));
+            let (gx, gz) = (x + dx, z + dz);
+            if block::name_of(get(shared, gx, y, gz)) == "grass_block" && block::is_air(get(shared, gx, y + 1, gz)) {
+                let plant = if rng.gen_bool(0.1) {
+                    block::state_by_name("dandelion").or(grass)
+                } else {
+                    grass
+                };
+                if let Some(p) = plant {
+                    set(shared, gx, y + 1, gz, p);
+                    placed = true;
+                }
+            }
+        }
+        return placed;
+    }
+
+    false
+}
+
 /// Replace a sapling with a small log + leaves tree.
 fn grow_tree(shared: &Arc<Shared>, x: i32, y: i32, z: i32, sapling: &str) {
     let species = sapling.strip_suffix("_sapling").unwrap_or("oak");
@@ -876,6 +927,19 @@ mod tests {
         let w = block::state_by_name("water").unwrap();
         let lvl3 = block::with_prop(w, "level", 3);
         assert_eq!(block::prop_index(lvl3, "level"), Some(3));
+    }
+
+    #[test]
+    fn bonemeal_targets_have_growth_state() {
+        // Crops carry an "age" property bone meal can advance.
+        assert!(is_crop("wheat"));
+        assert!(is_crop("carrots"));
+        let wheat = block::state_by_name("wheat").unwrap();
+        assert!(block::prop_index(wheat, "age").is_some());
+        assert!(block::prop_values(wheat, "age").unwrap() > 1);
+        // Saplings and grass blocks are also valid bone-meal targets.
+        assert!("oak_sapling".ends_with("_sapling"));
+        assert!(block::state_by_name("grass_block").is_some());
     }
 
     #[test]
