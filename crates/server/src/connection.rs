@@ -161,10 +161,10 @@ async fn login(mut rh: OwnedReadHalf, mut wh: OwnedWriteHalf, shared: Arc<Shared
         let uuid = resolve_identity(&shared, &key, &name, &secret).await;
         let reader = EncryptedReader::new(rh, Cfb8::new(&secret));
         let writer = EncryptedWriter::new(wh, Cfb8::new(&secret));
-        finish_login(reader, writer, shared, name, uuid).await
+        finish_login(reader, writer, shared, name, uuid, protocol).await
     } else {
         let uuid = offline_uuid(&name);
-        finish_login(rh, wh, shared, name, uuid).await
+        finish_login(rh, wh, shared, name, uuid, protocol).await
     }
 }
 
@@ -230,7 +230,14 @@ async fn resolve_identity(
 }
 
 /// Send Set Compression + Login Success and enter the play state.
-async fn finish_login<R, W>(reader: R, mut writer: W, shared: Arc<Shared>, name: String, uuid: uuid::Uuid) -> Result<()>
+async fn finish_login<R, W>(
+    reader: R,
+    mut writer: W,
+    shared: Arc<Shared>,
+    name: String,
+    uuid: uuid::Uuid,
+    protocol: i32,
+) -> Result<()>
 where
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin + Send + 'static,
@@ -242,7 +249,7 @@ where
     write_frame(&mut writer, &cb::login_success(uuid, &name), threshold).await?;
 
     info!(%name, %uuid, "player logging in");
-    play(reader, writer, shared, name, uuid, threshold).await
+    play(reader, writer, shared, name, uuid, threshold, protocol).await
 }
 
 // ---------------------------------------------------------------------------
@@ -256,6 +263,7 @@ async fn play<R, W>(
     name: String,
     uuid: uuid::Uuid,
     threshold: i32,
+    protocol: i32,
 ) -> Result<()>
 where
     R: AsyncRead + Unpin,
@@ -270,6 +278,8 @@ where
     let writer_task = tokio::spawn(async move {
         let mut writer = writer;
         while let Some(payload) = rx.recv().await {
+            // Translate the canonical (763) packet to the client's wire format.
+            let payload = crate::version::translate_clientbound(payload, protocol);
             if write_frame(&mut writer, &payload, threshold).await.is_err() {
                 break;
             }

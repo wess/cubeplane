@@ -35,6 +35,7 @@ mod serverbound;
 mod sim;
 mod state;
 mod text;
+mod version;
 
 use std::sync::Arc;
 use std::time::Duration;
