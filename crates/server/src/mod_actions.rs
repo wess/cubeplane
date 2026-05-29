@@ -33,7 +33,7 @@ fn apply(shared: &Arc<Shared>, action: ModAction) {
             info!(target: "cubeplane::mod", "{message}");
         }
         ModAction::SetBlock { x, y, z, block } => {
-            if let Some(state) = block::by_name(&block) {
+            if let Some(state) = block::state_by_name(&block) {
                 {
                     let mut world = shared.world.lock().unwrap();
                     world.set_block(x, y, z, state);

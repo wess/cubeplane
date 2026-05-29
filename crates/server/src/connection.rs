@@ -681,9 +681,7 @@ fn place_block(shared: &Arc<Shared>, player: &Player, x: i32, y: i32, z: i32, fa
         player.send(cb::set_slot(0, 0, slot as i16, after));
     }
 
-    let block_name = cubeplane_world::block::by_name; // for the mod event name
     let name = item::def(stack.id).map(|d| d.name).unwrap_or("block");
-    let _ = block_name;
     shared.fire_mod(ModEvent::BlockPlace {
         player: player.name.clone(),
         x: px,

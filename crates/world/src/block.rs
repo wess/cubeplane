@@ -81,3 +81,41 @@ blocks! {
 pub fn is_air(state: StateId) -> bool {
     state == AIR
 }
+
+use crate::blocks_table::{BlockInfo, BLOCKS};
+
+/// Look up the full block info for a state id via binary search over the
+/// generated table (covers every 1.20.1 block, not just the curated set).
+pub fn info(state: StateId) -> &'static BlockInfo {
+    // Find the block whose [min, max] range contains `state`.
+    let idx = BLOCKS
+        .binary_search_by(|b| {
+            if state < b.min {
+                std::cmp::Ordering::Greater
+            } else if state > b.max {
+                std::cmp::Ordering::Less
+            } else {
+                std::cmp::Ordering::Equal
+            }
+        })
+        .unwrap_or(0); // unknown → treat as air
+    &BLOCKS[idx]
+}
+
+/// Resolve any 1.20.1 block name to its default state id (full registry).
+pub fn state_by_name(name: &str) -> Option<StateId> {
+    let key = name.strip_prefix("minecraft:").unwrap_or(name);
+    BLOCKS.iter().find(|b| b.name == key).map(|b| b.default)
+}
+
+/// How much light a block absorbs (0 = transparent, 15 = fully opaque).
+#[inline]
+pub fn opacity(state: StateId) -> u8 {
+    info(state).opacity
+}
+
+/// Light a block emits (0..15).
+#[inline]
+pub fn emission(state: StateId) -> u8 {
+    info(state).emission
+}

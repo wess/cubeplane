@@ -169,7 +169,7 @@ pub fn chunk_data(c: &Chunk) -> BytesMut {
 
     b.write_varint(0); // block entity count
 
-    let light = c.full_sky_light();
+    let light = c.compute_light();
     chunk::write_bitset(&mut b, light.sky_light_mask);
     chunk::write_bitset(&mut b, light.block_light_mask);
     chunk::write_bitset(&mut b, light.empty_sky_light_mask);

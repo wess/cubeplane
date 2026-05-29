@@ -246,18 +246,127 @@ impl Chunk {
         buf
     }
 
-    /// Bitmask over [`LIGHT_SECTION_COUNT`] light sections that contain data.
-    /// cubeplane floods full skylight everywhere for a bright, simple world.
-    pub fn full_sky_light(&self) -> LightData {
-        let mask = (1u64 << LIGHT_SECTION_COUNT) - 1;
-        let arrays = vec![vec![0xFFu8; 2048]; LIGHT_SECTION_COUNT];
+    /// Compute real sky and block lighting for this chunk via flood-fill.
+    ///
+    /// Skylight starts at 15 in open columns and floods down/around losing one
+    /// level per step; block light floods out from emissive blocks. The BFS is
+    /// confined to the chunk (cross-chunk seams are not resolved), which keeps
+    /// it cheap while producing correct surface lighting and lit caves/torches.
+    pub fn compute_light(&self) -> LightData {
+        let h = WORLD_HEIGHT as usize;
+        let vol = SECTION_DIM * h * SECTION_DIM;
+        let cell = |x: usize, y: usize, z: usize| (y * SECTION_DIM + z) * SECTION_DIM + x;
+
+        let mut sky = vec![0u8; vol];
+        let mut blk = vec![0u8; vol];
+
+        // Direct skylight: light from the top until the first opaque block.
+        for x in 0..SECTION_DIM {
+            for z in 0..SECTION_DIM {
+                let mut open = true;
+                for yy in (0..h).rev() {
+                    let state = self.get_block(x, MIN_Y + yy as i32, z);
+                    if open && block::opacity(state) == 0 {
+                        sky[cell(x, yy, z)] = 15;
+                    } else {
+                        open = false;
+                    }
+                }
+            }
+        }
+
+        // Seed block light from emissive blocks.
+        for x in 0..SECTION_DIM {
+            for z in 0..SECTION_DIM {
+                for yy in 0..h {
+                    let e = block::emission(self.get_block(x, MIN_Y + yy as i32, z));
+                    if e > 0 {
+                        blk[cell(x, yy, z)] = e;
+                    }
+                }
+            }
+        }
+
+        self.flood(&mut sky, vol, &cell);
+        self.flood(&mut blk, vol, &cell);
+
+        // Pack into per-section 2048-byte arrays (one nibble per block).
+        let mut sky_arrays = Vec::with_capacity(LIGHT_SECTION_COUNT);
+        let mut blk_arrays = Vec::with_capacity(LIGHT_SECTION_COUNT);
+        let mut sky_mask = 0u64;
+        let mut blk_mask = 0u64;
+        let mut empty_blk_mask = 0u64;
+
+        for ls in 0..LIGHT_SECTION_COUNT {
+            // ls 0 is below the world, ls 25 is above it; 1..=24 are sections.
+            let (sky_sec, blk_sec) = if ls == 0 {
+                (vec![0u8; 2048], vec![0u8; 2048])
+            } else if ls == LIGHT_SECTION_COUNT - 1 {
+                (vec![0xFFu8; 2048], vec![0u8; 2048]) // open sky above
+            } else {
+                let base = (ls - 1) * SECTION_DIM;
+                let mut s = vec![0u8; 2048];
+                let mut b = vec![0u8; 2048];
+                for c in 0..SECTION_VOLUME {
+                    let (lx, lz, ly) = (c & 15, (c >> 4) & 15, c >> 8);
+                    let world = cell(lx, base + ly, lz);
+                    put_nibble(&mut s, c, sky[world]);
+                    put_nibble(&mut b, c, blk[world]);
+                }
+                (s, b)
+            };
+            sky_mask |= 1 << ls;
+            sky_arrays.push(sky_sec);
+            if blk_sec.iter().any(|&v| v != 0) {
+                blk_mask |= 1 << ls;
+                blk_arrays.push(blk_sec);
+            } else {
+                empty_blk_mask |= 1 << ls;
+            }
+        }
+
         LightData {
-            sky_light_mask: mask,
-            block_light_mask: 0,
+            sky_light_mask: sky_mask,
+            block_light_mask: blk_mask,
             empty_sky_light_mask: 0,
-            empty_block_light_mask: mask,
-            sky_light: arrays,
-            block_light: Vec::new(),
+            empty_block_light_mask: empty_blk_mask,
+            sky_light: sky_arrays,
+            block_light: blk_arrays,
+        }
+    }
+
+    /// Breadth-first light propagation over a light grid.
+    fn flood(&self, light: &mut [u8], vol: usize, cell: &impl Fn(usize, usize, usize) -> usize) {
+        use std::collections::VecDeque;
+        let h = WORLD_HEIGHT as usize;
+        let mut queue: VecDeque<usize> = (0..vol).filter(|&i| light[i] > 1).collect();
+        while let Some(i) = queue.pop_front() {
+            let level = light[i];
+            if level <= 1 {
+                continue;
+            }
+            let (x, z, y) = (i & 15, (i >> 4) & 15, i >> 8);
+            let mut spread = |nx: usize, ny: usize, nz: usize, queue: &mut VecDeque<usize>| {
+                let state = self.get_block(nx, MIN_Y + ny as i32, nz);
+                let op = block::opacity(state);
+                if op >= 15 {
+                    return; // opaque: light stops
+                }
+                let n = cell(nx, ny, nz);
+                let next = level.saturating_sub(op.max(1));
+                if next > light[n] {
+                    light[n] = next;
+                    if next > 1 {
+                        queue.push_back(n);
+                    }
+                }
+            };
+            if x > 0 { spread(x - 1, y, z, &mut queue); }
+            if x < SECTION_DIM - 1 { spread(x + 1, y, z, &mut queue); }
+            if z > 0 { spread(x, y, z - 1, &mut queue); }
+            if z < SECTION_DIM - 1 { spread(x, y, z + 1, &mut queue); }
+            if y > 0 { spread(x, y - 1, z, &mut queue); }
+            if y < h - 1 { spread(x, y + 1, z, &mut queue); }
         }
     }
 
@@ -275,6 +384,16 @@ pub struct LightData {
     pub empty_block_light_mask: u64,
     pub sky_light: Vec<Vec<u8>>,
     pub block_light: Vec<Vec<u8>>,
+}
+
+/// Set the 4-bit light value for cell `c` in a 2048-byte section array.
+fn put_nibble(arr: &mut [u8], c: usize, v: u8) {
+    let b = c / 2;
+    if c & 1 == 0 {
+        arr[b] = (arr[b] & 0xF0) | (v & 0x0F);
+    } else {
+        arr[b] = (arr[b] & 0x0F) | ((v & 0x0F) << 4);
+    }
 }
 
 /// Pack `values` (each `bits` wide) into i64s without spanning longs.
@@ -354,7 +473,27 @@ mod tests {
         }
         let data = c.encode_sections();
         assert!(!data.is_empty());
-        let light = c.full_sky_light();
+        let light = c.compute_light();
         assert_eq!(light.sky_light.len(), LIGHT_SECTION_COUNT);
+    }
+
+    #[test]
+    fn lighting_is_dark_under_cover_and_lit_above() {
+        let mut c = Chunk::new(0, 0);
+        // Solid stone ceiling at y=0 over the whole chunk.
+        for x in 0..SECTION_DIM {
+            for z in 0..SECTION_DIM {
+                c.set_block(x, 0, z, block::STONE);
+            }
+        }
+        let light = c.compute_light();
+        // Sky sections exist for all light sections.
+        assert_eq!(light.sky_light.len(), LIGHT_SECTION_COUNT);
+        // A torch lights its surroundings (block light section becomes non-empty).
+        let mut lit = Chunk::new(0, 0);
+        lit.set_block(8, 70, 8, block::CHEST); // any block
+        lit.set_block(8, 71, 8, 5864); // glowstone (emission 15)
+        let l2 = lit.compute_light();
+        assert!(!l2.block_light.is_empty(), "glowstone should emit block light");
     }
 }

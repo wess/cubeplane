@@ -5,6 +5,7 @@
 //! block get/set in world coordinates, which the server and mod API build on.
 
 pub mod block;
+pub mod blocks_table;
 pub mod chunk;
 pub mod gen;
 

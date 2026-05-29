@@ -185,7 +185,7 @@ async fn setblock(
     if !authorized(&ctrl, &headers) {
         return unauthorized();
     }
-    match block::by_name(&body.block) {
+    match block::state_by_name(&body.block) {
         Some(state) => {
             {
                 let mut world = ctrl.shared.world.lock().unwrap();
