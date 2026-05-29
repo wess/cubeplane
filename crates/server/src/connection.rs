@@ -2407,6 +2407,60 @@ mod encryption_tests {
     /// Drive a simulated 1.19.4 (protocol 762) client: handshake → login → play
     /// directly (no Configuration phase), verifying the Join Game body is
     /// rewritten to the 1.19.4 layout (codec inline, no portalCooldown).
+    /// Drive a simulated 1.19 (protocol 759) client: handshake → login → play,
+    /// verifying the join arrives at the 1.19 wire id (0x23) via its id map.
+    #[tokio::test]
+    async fn version_759_join() {
+        let probe = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = probe.local_addr().unwrap().port();
+        drop(probe);
+
+        let mut config = Config::default();
+        config.server.host = "127.0.0.1".into();
+        config.server.port = port;
+        config.server.compression_threshold = -1;
+        config.server.online_mode = false;
+        config.server.view_distance = 2;
+        config.control.enabled = false;
+        config.mods.enabled = false;
+        config.world.save = false;
+        config.world.generator = "flat".into();
+        tokio::spawn(async move {
+            let _ = crate::run(config).await;
+        });
+        tokio::time::sleep(Duration::from_millis(400)).await;
+
+        let mut conn = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        let mut hs = BytesMut::new();
+        hs.write_varint(0x00);
+        hs.write_varint(759);
+        hs.write_string("127.0.0.1");
+        hs.write_u16(port);
+        hs.write_varint(2);
+        write_frame(&mut conn, &hs, None).await;
+        let mut ls = BytesMut::new();
+        ls.write_varint(0x00);
+        ls.write_string("V759");
+        ls.write_bool(false);
+        write_frame(&mut conn, &ls, None).await;
+
+        let (id, _b) = read_frame(&mut conn, None).await;
+        assert_eq!(id, 0x02, "expected Login Success");
+
+        let mut saw_join = false;
+        for _ in 0..40 {
+            let (pid, mut body) = read_frame(&mut conn, None).await;
+            if pid == 0x23 {
+                let _entity = body.read_i32().unwrap();
+                let _hardcore = body.read_bool().unwrap();
+                let _gm = body.read_u8().unwrap();
+                saw_join = true;
+                break;
+            }
+        }
+        assert!(saw_join, "did not receive a 759 Join Game at the remapped id");
+    }
+
     /// Drive a simulated 1.19.2 (protocol 760) client and verify the semantic
     /// player_info downgrade: 1.20.1's action-bitmask Player Info Update is
     /// converted to 1.19.2's enum-action Player Info `add_player` form, parsed

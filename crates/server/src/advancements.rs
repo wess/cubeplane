@@ -81,7 +81,7 @@ const TREE: &[Node] = &[
 pub fn supported(protocol: i32) -> bool {
     // 1.19.2–1.20.2 use a JSON-string display title with the criteria array
     // (telemetry only from 1.20); 1.20.3+ switched to NBT text (not yet emitted).
-    (760..=764).contains(&protocol)
+    (759..=764).contains(&protocol)
 }
 
 /// The criterion name for an advancement (the key's last path segment).
