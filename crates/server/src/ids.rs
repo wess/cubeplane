@@ -36,6 +36,25 @@ pub mod login_cb {
 pub mod login_sb {
     pub const LOGIN_START: i32 = 0x00;
     pub const ENCRYPTION_RESPONSE: i32 = 0x01;
+    /// Login Acknowledged (1.20.2+): the client confirms login and enters the
+    /// Configuration state.
+    pub const LOGIN_ACKNOWLEDGED: i32 = 0x03;
+}
+
+/// Configuration state (1.20.2+), clientbound.
+pub mod config_cb {
+    pub const FINISH_CONFIGURATION: i32 = 0x02;
+    pub const REGISTRY_DATA: i32 = 0x05;
+}
+
+/// Configuration state (1.20.2+), serverbound.
+pub mod config_sb {
+    pub const CLIENT_INFORMATION: i32 = 0x00;
+    pub const PLUGIN_MESSAGE: i32 = 0x01;
+    pub const FINISH_CONFIGURATION: i32 = 0x02;
+    pub const KEEP_ALIVE: i32 = 0x03;
+    pub const PONG: i32 = 0x04;
+    pub const RESOURCE_PACK: i32 = 0x05;
 }
 
 /// Play, clientbound.

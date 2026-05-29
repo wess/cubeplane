@@ -120,6 +120,8 @@ pub struct Player {
     pub uuid: Uuid,
     pub name: String,
     pub gamemode: i32,
+    /// The client's negotiated protocol version (e.g. 763 for 1.20.1).
+    pub protocol: i32,
     pub sender: UnboundedSender<BytesMut>,
     state: Arc<Mutex<PlayerState>>,
     inventory: Arc<Mutex<Inventory>>,
@@ -133,6 +135,7 @@ impl Player {
         gamemode: i32,
         sender: UnboundedSender<BytesMut>,
         spawn: (f64, f64, f64),
+        protocol: i32,
     ) -> Self {
         let mut st = PlayerState::new(spawn.0, spawn.1, spawn.2);
         st.gamemode = gamemode;
@@ -141,6 +144,7 @@ impl Player {
             uuid,
             name,
             gamemode,
+            protocol,
             sender,
             state: Arc::new(Mutex::new(st)),
             inventory: Arc::new(Mutex::new(Inventory::default())),

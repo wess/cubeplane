@@ -131,6 +131,24 @@ pub fn join_game(
     b
 }
 
+/// Configuration-state Registry Data packet (1.20.2+): carries the dimension /
+/// biome / chat-type codec as a *nameless* network NBT compound.
+pub fn config_registry_data() -> BytesMut {
+    let mut b = pkt(crate::ids::config_cb::REGISTRY_DATA);
+    // `to_bytes_named("")` yields `0x0A 00 00 <payload>`; strip the empty name's
+    // two length bytes to get the anonymous form 1.20.2 expects.
+    let named = registry::codec().to_bytes_named("");
+    b.write_u8(0x0a);
+    b.write_bytes(&named[3..]);
+    b
+}
+
+/// Configuration-state Finish Configuration packet (1.20.2+): empty body; tells
+/// the client to leave Configuration and enter Play.
+pub fn config_finish() -> BytesMut {
+    pkt(crate::ids::config_cb::FINISH_CONFIGURATION)
+}
+
 pub fn spawn_position(x: i32, y: i32, z: i32, angle: f32) -> BytesMut {
     let mut b = pkt(play_cb::SPAWN_POSITION);
     b.write_position(x, y, z);

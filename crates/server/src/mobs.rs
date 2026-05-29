@@ -83,7 +83,7 @@ pub fn tick(shared: &Arc<Shared>, tick: u64, is_night: bool) {
                         && shared.earn_advancement(p.entity_id, "cubeplane:kill")
                     {
                         let earned = shared.earned_advancements(p.entity_id);
-                        p.send(crate::advancements::packet(&earned));
+                        p.send(crate::advancements::packet(&earned, p.protocol));
                     }
                 }
                 continue;

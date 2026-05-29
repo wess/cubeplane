@@ -47,6 +47,19 @@ fn rewrite_clientbound_body(canonical_id: i32, protocol: i32, body: &[u8]) -> Op
         return None;
     }
     match canonical_id {
+        // login / Join Game (763 0x28): reorder fields, drop the inline codec
+        // (sent during the Configuration phase in 1.20.2), add doLimitedCrafting.
+        0x28 => rewrite_login_763_to_764(body),
+        // unload_chunk (763 0x1e): 1.20.2 swapped the field order to (z, x).
+        0x1e => {
+            if body.len() != 8 {
+                return None;
+            }
+            let mut out = Vec::with_capacity(8);
+            out.extend_from_slice(&body[4..8]); // chunkZ first
+            out.extend_from_slice(&body[0..4]); // then chunkX
+            Some(out)
+        }
         // map_chunk (763 0x24): x:i32, z:i32, heightmaps:NBT, ... — 1.20.2 makes
         // the heightmaps a nameless network NBT.
         0x24 => {
@@ -61,6 +74,65 @@ fn rewrite_clientbound_body(canonical_id: i32, protocol: i32, body: &[u8]) -> Op
         }
         _ => None,
     }
+}
+
+/// Rewrite the 763 Join Game body into the 1.20.2 layout: the dimension codec is
+/// removed (it ships in the Configuration phase), `doLimitedCrafting` is added,
+/// and several fields are reordered.
+fn rewrite_login_763_to_764(body: &[u8]) -> Option<Vec<u8>> {
+    use cubeplane_protocol::{ProtoRead, ProtoWrite};
+    let mut r = BytesMut::from(body);
+    // --- read the 763 layout ---
+    let entity_id = r.read_i32().ok()?;
+    let hardcore = r.read_bool().ok()?;
+    let game_mode = r.read_u8().ok()?;
+    let prev_game_mode = r.read_i8().ok()?;
+    let world_count = r.read_varint().ok()?;
+    let mut worlds = Vec::new();
+    for _ in 0..world_count {
+        worlds.push(r.read_string().ok()?);
+    }
+    // Skip the inline dimension codec (a named root NBT compound).
+    let codec_len = named_root_nbt_to_anonymous(&r, &mut Vec::new())?;
+    let _ = r.split_to(codec_len);
+    let world_type = r.read_string().ok()?;
+    let world_name = r.read_string().ok()?;
+    let hashed_seed = r.read_i64().ok()?;
+    let max_players = r.read_varint().ok()?;
+    let view_distance = r.read_varint().ok()?;
+    let sim_distance = r.read_varint().ok()?;
+    let reduced_debug = r.read_bool().ok()?;
+    let respawn_screen = r.read_bool().ok()?;
+    let is_debug = r.read_bool().ok()?;
+    let is_flat = r.read_bool().ok()?;
+    let has_death = r.read_bool().ok()?;
+    // (763 has no death payload when has_death is false, matching our builder.)
+    let portal_cooldown = r.read_varint().ok()?;
+
+    // --- write the 764 layout ---
+    let mut o = BytesMut::new();
+    o.write_i32(entity_id);
+    o.write_bool(hardcore);
+    o.write_varint(world_count);
+    for w in &worlds {
+        o.write_string(w);
+    }
+    o.write_varint(max_players);
+    o.write_varint(view_distance);
+    o.write_varint(sim_distance);
+    o.write_bool(reduced_debug);
+    o.write_bool(respawn_screen);
+    o.write_bool(false); // doLimitedCrafting (new in 1.20.2)
+    o.write_string(&world_type);
+    o.write_string(&world_name);
+    o.write_i64(hashed_seed);
+    o.write_u8(game_mode);
+    o.write_i8(prev_game_mode);
+    o.write_bool(is_debug);
+    o.write_bool(is_flat);
+    o.write_bool(has_death);
+    o.write_varint(portal_cooldown);
+    Some(o.to_vec())
 }
 
 /// Translate an inbound serverbound play payload from `protocol`'s wire format

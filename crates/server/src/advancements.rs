@@ -95,9 +95,12 @@ fn chat_json(text: &str) -> String {
     serde_json::json!({ "text": text }).to_string()
 }
 
-/// Build the Update Advancements packet defining the whole tree, marking every
-/// key in `completed` as achieved.
-pub fn packet(completed: &[&str]) -> BytesMut {
+/// Build the Update Advancements packet (canonical 763 id; the translation layer
+/// remaps it per protocol) defining the whole tree, marking every key in
+/// `completed` as achieved. `protocol` selects the body layout: 1.20.2 (764)
+/// dropped the per-advancement `criteria` array.
+pub fn packet(completed: &[&str], protocol: i32) -> BytesMut {
+    let include_criteria = protocol < 764;
     let mut b = pkt(play_cb::UPDATE_ADVANCEMENTS);
     b.write_bool(true); // reset/clear before applying
 
@@ -135,12 +138,19 @@ pub fn packet(completed: &[&str]) -> BytesMut {
         b.write_f32(node.x);
         b.write_f32(node.y);
 
-        // Requirements: a single group with this node's lone criterion.
+        // Criteria: the named criteria this advancement defines (value is void).
+        // 1.20.2 removed this array (requirements carry the names directly).
         let crit = criterion(node.key);
+        if include_criteria {
+            b.write_varint(1); // one criterion
+            b.write_string(crit); // key (no value payload follows)
+        }
+        // Requirements: a single group requiring that lone criterion.
         b.write_varint(1); // one requirement group
         b.write_varint(1); // one criterion in the group
         b.write_string(crit);
-        // NB: protocol 763 has no `sends_telemetry` boolean here.
+        // sendsTelemetryData (present in protocol 763 and 764).
+        b.write_bool(false);
     }
 
     // Removed advancements: none.
@@ -184,8 +194,10 @@ mod tests {
     #[test]
     fn packet_encodes_without_panic() {
         // Empty and partial completion both encode to a non-trivial buffer.
-        assert!(packet(&[]).len() > 16);
-        assert!(packet(&["cubeplane:mine"]).len() > packet(&[]).len() - 4);
+        assert!(packet(&[], 763).len() > 16);
+        assert!(packet(&["cubeplane:mine"], 763).len() > packet(&[], 763).len() - 4);
+        // 1.20.2 omits the criteria array, so its packet is shorter than 763's.
+        assert!(packet(&[], 764).len() < packet(&[], 763).len());
         // Every tree node's icon resolves in the registry.
         for node in TREE {
             assert!(item::id_any(node.icon_item).is_some(), "{} icon missing", node.icon_item);

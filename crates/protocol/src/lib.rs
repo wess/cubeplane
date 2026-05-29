@@ -60,10 +60,11 @@ pub const KNOWN_VERSIONS: &[Version] = &[
     Version { protocol: 47, name: "1.8.x" },
 ];
 
-/// The protocol versions cubeplane can host a play session for. Only 1.20.1 has
-/// its packet layout fully implemented today; this is the single source of truth
-/// the login gate consults.
-pub const SUPPORTED_PROTOCOLS: &[i32] = &[PROTOCOL_VERSION];
+/// The protocol versions cubeplane can host a play session for. 1.20.1 is the
+/// canonical/native layout; 1.20.2 (764) is served through the translation layer
+/// (id maps + body rewriters + the Configuration phase). This is the single
+/// source of truth the login gate consults.
+pub const SUPPORTED_PROTOCOLS: &[i32] = &[PROTOCOL_VERSION, 764];
 
 /// Whether cubeplane can host a play session for a client protocol version.
 pub fn is_supported(protocol: i32) -> bool {

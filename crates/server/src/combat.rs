@@ -177,7 +177,7 @@ mod tests {
             None,
         );
         let (tx, _rx) = unbounded_channel();
-        let player = Player::new(1, Uuid::nil(), "Tester".into(), 0, tx, (0.0, 64.0, 0.0));
+        let player = Player::new(1, Uuid::nil(), "Tester".into(), 0, tx, (0.0, 64.0, 0.0), 763);
         shared.add_player(player.clone());
         (shared, player)
     }

@@ -26,7 +26,7 @@ use crate::drops;
 use crate::encryption::{auth_hash, Cfb8};
 use crate::item;
 use crate::mobs;
-use crate::ids::{login_cb, login_sb, status_sb};
+use crate::ids::{config_sb, login_cb, login_sb, status_sb};
 use crate::player::{offline_uuid, Player};
 use crate::serverbound::{self, Play};
 use crate::state::Shared;
@@ -231,7 +231,7 @@ async fn resolve_identity(
 
 /// Send Set Compression + Login Success and enter the play state.
 async fn finish_login<R, W>(
-    reader: R,
+    mut reader: R,
     mut writer: W,
     shared: Arc<Shared>,
     name: String,
@@ -248,8 +248,45 @@ where
     }
     write_frame(&mut writer, &cb::login_success(uuid, &name), threshold).await?;
 
+    // 1.20.2+ inserts a Configuration phase between login and play: the client
+    // acknowledges login, then the server ships the registry codec and signals
+    // the end of configuration before play begins.
+    if protocol >= 764 {
+        configuration_phase(&mut reader, &mut writer, threshold).await?;
+    }
+
     info!(%name, %uuid, "player logging in");
     play(reader, writer, shared, name, uuid, threshold, protocol).await
+}
+
+/// Drive the 1.20.2 Configuration state: await Login Acknowledged, send the
+/// registry codec and Finish Configuration, then await the client's ack.
+async fn configuration_phase<R, W>(reader: &mut R, writer: &mut W, threshold: i32) -> Result<()>
+where
+    R: AsyncRead + Unpin,
+    W: AsyncWrite + Unpin,
+{
+    // Login Acknowledged moves the client into the Configuration state.
+    let frame = read_frame(reader, threshold).await?;
+    let raw = RawPacket::parse(frame)?;
+    if raw.id != login_sb::LOGIN_ACKNOWLEDGED {
+        return Ok(());
+    }
+    // Ship the registry codec, then end configuration.
+    write_frame(writer, &cb::config_registry_data(), threshold).await?;
+    write_frame(writer, &cb::config_finish(), threshold).await?;
+    // Consume configuration packets (client info, plugin messages, …) until the
+    // client acknowledges Finish Configuration and is ready for play.
+    loop {
+        let frame = read_frame(reader, threshold).await?;
+        if frame.is_empty() {
+            continue;
+        }
+        let raw = RawPacket::parse(frame)?;
+        if raw.id == config_sb::FINISH_CONFIGURATION {
+            return Ok(());
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -286,7 +323,7 @@ where
         }
     });
 
-    let player = Player::new(entity_id, uuid, name.clone(), gamemode, tx, spawn);
+    let player = Player::new(entity_id, uuid, name.clone(), gamemode, tx, spawn, protocol);
 
     // Restore saved player data (position, vitals, inventory, XP) if present.
     let save_dir = std::path::PathBuf::from(&shared.config.world.save_dir);
@@ -324,7 +361,7 @@ where
     // Define the advancement tree (with any progress restored this session).
     {
         let earned = shared.earned_advancements(player.entity_id);
-        player.send(advancements::packet(&earned));
+        player.send(advancements::packet(&earned, player.protocol));
     }
     player.send(cb::declare_commands(&[
         ("help", false), ("list", false), ("pos", false), ("tp", true),
@@ -908,7 +945,7 @@ fn award_advancement(shared: &Arc<Shared>, player: &Player, event: &str) {
     if let Some(key) = advancements::key_for_event(event) {
         if shared.earn_advancement(player.entity_id, key) {
             let earned = shared.earned_advancements(player.entity_id);
-            player.send(advancements::packet(&earned));
+            player.send(advancements::packet(&earned, player.protocol));
         }
     }
 }
@@ -2357,6 +2394,98 @@ mod encryption_tests {
         }
         c.write_all(&bytes).await.unwrap();
         c.flush().await.unwrap();
+    }
+
+    /// Drive a simulated 1.20.2 (protocol 764) client through handshake → login →
+    /// Configuration phase → play, verifying the server speaks the version's wire
+    /// protocol end-to-end (offline mode, no compression for a simple stream).
+    #[tokio::test]
+    async fn version_764_join_via_configuration_phase() {
+        let probe = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = probe.local_addr().unwrap().port();
+        drop(probe);
+
+        let mut config = Config::default();
+        config.server.host = "127.0.0.1".into();
+        config.server.port = port;
+        config.server.compression_threshold = -1;
+        config.server.online_mode = false;
+        config.server.view_distance = 2;
+        config.control.enabled = false;
+        config.mods.enabled = false;
+        config.world.save = false;
+        config.world.generator = "flat".into();
+        tokio::spawn(async move {
+            let _ = crate::run(config).await;
+        });
+        tokio::time::sleep(Duration::from_millis(400)).await;
+
+        let mut conn = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+
+        // Handshake announcing protocol 764, next state = login.
+        let mut hs = BytesMut::new();
+        hs.write_varint(0x00);
+        hs.write_varint(764);
+        hs.write_string("127.0.0.1");
+        hs.write_u16(port);
+        hs.write_varint(2);
+        write_frame(&mut conn, &hs, None).await;
+
+        // Login Start.
+        let mut ls = BytesMut::new();
+        ls.write_varint(0x00);
+        ls.write_string("V764");
+        ls.write_bool(false);
+        write_frame(&mut conn, &ls, None).await;
+
+        // Login Success (0x02), then the client acknowledges login.
+        let (id, _b) = read_frame(&mut conn, None).await;
+        assert_eq!(id, 0x02, "expected Login Success");
+        let mut ack = BytesMut::new();
+        ack.write_varint(0x03); // login_acknowledged
+        write_frame(&mut conn, &ack, None).await;
+
+        // Configuration phase: expect Registry Data (0x05) then Finish (0x02).
+        let mut saw_registry = false;
+        let mut saw_finish = false;
+        for _ in 0..10 {
+            let (cid, _b) = read_frame(&mut conn, None).await;
+            if cid == 0x05 {
+                saw_registry = true;
+            }
+            if cid == 0x02 {
+                saw_finish = true;
+                break;
+            }
+        }
+        assert!(saw_registry, "config phase did not send Registry Data");
+        assert!(saw_finish, "config phase did not send Finish Configuration");
+
+        // Acknowledge Finish Configuration → server enters play.
+        let mut fin = BytesMut::new();
+        fin.write_varint(0x02); // serverbound finish_configuration
+        write_frame(&mut conn, &fin, None).await;
+
+        // Play begins: the Join Game packet must arrive with 764's wire id (0x29,
+        // remapped from canonical 0x28) and a parseable 764-layout body.
+        let mut saw_join = false;
+        for _ in 0..40 {
+            let (pid, mut body) = read_frame(&mut conn, None).await;
+            if pid == 0x29 {
+                // Parse the 764 Join Game body to confirm the rewrite is valid.
+                let _entity = body.read_i32().unwrap();
+                let _hardcore = body.read_bool().unwrap();
+                let world_count = body.read_varint().unwrap();
+                assert!(world_count >= 1, "expected at least one world");
+                for _ in 0..world_count {
+                    let _ = body.read_string().unwrap();
+                }
+                let _max = body.read_varint().unwrap();
+                saw_join = true;
+                break;
+            }
+        }
+        assert!(saw_join, "did not receive a 764 Join Game packet");
     }
 
     #[tokio::test]
