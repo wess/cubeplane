@@ -395,6 +395,7 @@ where
     }
     shared.remove_player(entity_id);
     shared.clear_effects(entity_id);
+    shared.clear_stats(entity_id);
     shared.broadcast(cb::player_info_remove(&[uuid]));
     shared.broadcast(cb::remove_entities(&[entity_id]));
     let leave_msg = text::system_notice(format!("{name} left the cubeplane"));
@@ -613,6 +614,9 @@ async fn play_loop<R: AsyncRead + Unpin>(
             Play::ClientCommand { action } => {
                 if action == 0 {
                     respawn_player(shared, player, loaded, last_center);
+                } else if action == 1 {
+                    // The client opened the statistics screen.
+                    player.send(cb::award_statistics(&shared.stat_entries(player.entity_id)));
                 }
             }
             Play::TeleportConfirm { .. }
@@ -1912,6 +1916,11 @@ fn break_block(shared: &Arc<Shared>, player: &Player, x: i32, y: i32, z: i32, cr
         prev
     };
     shared.broadcast(cb::block_update(x, y, z, cubeplane_world::block::AIR));
+
+    // Record the mined-block statistic (by block registry id).
+    if !cubeplane_world::block::is_air(previous) {
+        shared.stat_block_mined(player.entity_id, cubeplane_world::block::block_id(previous));
+    }
 
     // Breaking a chest spills its contents and removes the block entity.
     if cubeplane_world::block::info(previous).name == "chest" {

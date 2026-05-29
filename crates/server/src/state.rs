@@ -27,6 +27,15 @@ type ActiveButton = (u8, i32, i32, i32, u32);
 /// A pending block change: `(dim, x, y, z, target state, ticks remaining)`.
 type ScheduledChange = (u8, i32, i32, i32, u16, u32);
 
+/// A player's accumulated statistics (the subset we can map to exact ids).
+#[derive(Default)]
+pub struct PlayerStats {
+    /// Blocks mined, keyed by block registry id.
+    pub mined: HashMap<i32, i32>,
+    /// Mobs killed, keyed by entity-type registry id.
+    pub killed: HashMap<i32, i32>,
+}
+
 /// Map a villager's accumulated trade experience to its level (1–5), using the
 /// vanilla 1.20.1 thresholds.
 pub fn level_from_xp(xp: i32) -> i32 {
@@ -120,6 +129,9 @@ pub struct Shared {
     trade_uses: RwLock<HashMap<i32, Vec<u8>>>,
     /// Per-villager trade experience (entity id → xp), drives trade level.
     villager_xp: RwLock<HashMap<i32, i32>>,
+    /// Per-player statistics: blocks mined (by block id) and mobs killed (by
+    /// entity-type id), keyed by player entity id.
+    stats: RwLock<HashMap<i32, PlayerStats>>,
     started: Instant,
 }
 
@@ -159,6 +171,7 @@ impl Shared {
             effects: RwLock::new(HashMap::new()),
             trade_uses: RwLock::new(HashMap::new()),
             villager_xp: RwLock::new(HashMap::new()),
+            stats: RwLock::new(HashMap::new()),
             mods,
             server_key,
             started: Instant::now(),
@@ -645,6 +658,40 @@ impl Shared {
     /// Restock all villagers, clearing every trade's use count.
     pub fn restock_trades(&self) {
         self.trade_uses.write().unwrap().clear();
+    }
+
+    /// Record that a player mined one block of the given block id.
+    pub fn stat_block_mined(&self, player: i32, block_id: i32) {
+        let mut s = self.stats.write().unwrap();
+        *s.entry(player).or_default().mined.entry(block_id).or_insert(0) += 1;
+    }
+
+    /// Record that a player killed one mob of the given entity-type id.
+    pub fn stat_mob_killed(&self, player: i32, type_id: i32) {
+        let mut s = self.stats.write().unwrap();
+        *s.entry(player).or_default().killed.entry(type_id).or_insert(0) += 1;
+    }
+
+    /// Build the Award Statistics entry list `(category, statistic, value)` for a
+    /// player: category 0 = mined (block id), category 6 = killed (entity type).
+    pub fn stat_entries(&self, player: i32) -> Vec<(i32, i32, i32)> {
+        let s = self.stats.read().unwrap();
+        let Some(ps) = s.get(&player) else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        for (id, n) in &ps.mined {
+            out.push((0, *id, *n));
+        }
+        for (id, n) in &ps.killed {
+            out.push((6, *id, *n));
+        }
+        out
+    }
+
+    /// Drop a player's statistics (on disconnect).
+    pub fn clear_stats(&self, player: i32) {
+        self.stats.write().unwrap().remove(&player);
     }
 
     /// A villager's current trade level (1 = novice … 5 = master).

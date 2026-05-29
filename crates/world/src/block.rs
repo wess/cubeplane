@@ -102,6 +102,23 @@ pub fn info(state: StateId) -> &'static BlockInfo {
     &BLOCKS[idx]
 }
 
+/// The block's registry id (its index in the state-sorted table). State ids are
+/// assigned in block-registry order, so this index equals the block registry id
+/// used by, e.g., the mined-block statistic.
+pub fn block_id(state: StateId) -> i32 {
+    BLOCKS
+        .binary_search_by(|b| {
+            if state < b.min {
+                std::cmp::Ordering::Greater
+            } else if state > b.max {
+                std::cmp::Ordering::Less
+            } else {
+                std::cmp::Ordering::Equal
+            }
+        })
+        .unwrap_or(0) as i32
+}
+
 /// Resolve any 1.20.1 block name to its default state id (full registry).
 pub fn state_by_name(name: &str) -> Option<StateId> {
     let key = name.strip_prefix("minecraft:").unwrap_or(name);
@@ -246,5 +263,16 @@ mod tests {
         assert!(state_by_name("minecraft:diamond_block").is_some());
         assert_eq!(opacity(STONE), 15);
         assert_eq!(emission(5864), 15); // glowstone
+    }
+
+    #[test]
+    fn block_id_matches_registry_order() {
+        // State ids are assigned in block-registry order, so block_id is the
+        // registry index: air = 0, stone = 1.
+        assert_eq!(block_id(state_by_name("air").unwrap()), 0);
+        assert_eq!(block_id(state_by_name("stone").unwrap()), 1);
+        // Any state within a block's range maps to the same id.
+        let oak = state_by_name("oak_stairs").unwrap();
+        assert_eq!(block_id(oak), block_id(oak + 3));
     }
 }

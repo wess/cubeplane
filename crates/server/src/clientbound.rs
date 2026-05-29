@@ -519,6 +519,20 @@ pub fn trade_list(
     b
 }
 
+/// Award Statistics: each entry is `(category_id, statistic_id, value)`. We use
+/// category 0 (block mined, statistic = block registry id) and category 6 (mob
+/// killed, statistic = entity-type registry id) — ids we can map exactly.
+pub fn award_statistics(entries: &[(i32, i32, i32)]) -> BytesMut {
+    let mut b = pkt(play_cb::AWARD_STATISTICS);
+    b.write_varint(entries.len() as i32);
+    for (cat, stat, value) in entries {
+        b.write_varint(*cat);
+        b.write_varint(*stat);
+        b.write_varint(*value);
+    }
+    b
+}
+
 /// Open the sign-edit screen for a freshly-placed sign.
 pub fn open_sign_editor(x: i32, y: i32, z: i32) -> BytesMut {
     let mut b = pkt(play_cb::OPEN_SIGN_EDITOR);

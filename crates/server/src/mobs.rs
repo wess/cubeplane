@@ -77,6 +77,7 @@ pub fn tick(shared: &Arc<Shared>, tick: u64, is_night: bool) {
                 shared.broadcast(cb::spawn_xp_orb(shared.next_entity_id(), mob.x, mob.y, mob.z, xp as i16));
                 if let Some((p, _)) = nearest_player(&players, mob.x, mob.z) {
                     combat::grant_xp(&p, xp);
+                    shared.stat_mob_killed(p.entity_id, mob.kind.type_id());
                 }
                 continue;
             }

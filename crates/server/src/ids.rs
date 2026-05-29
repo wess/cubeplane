@@ -43,6 +43,7 @@ pub mod play_cb {
     pub const SPAWN_ENTITY: i32 = 0x01;
     pub const SPAWN_XP_ORB: i32 = 0x02;
     pub const SPAWN_PLAYER: i32 = 0x03;
+    pub const AWARD_STATISTICS: i32 = 0x05;
     pub const TRADE_LIST: i32 = 0x2a;
     pub const SET_PASSENGERS: i32 = 0x59;
     pub const DECLARE_COMMANDS: i32 = 0x10;
