@@ -50,6 +50,8 @@ pub fn tick(shared: &Arc<Shared>, tick: u64, is_night: bool) {
     }
 
     let mut remove = Vec::new();
+    let mut lovers: Vec<(i32, MobKind, f64, f64, f64)> = Vec::new();
+    let mut babies: Vec<(MobKind, f64, f64, f64)> = Vec::new();
     {
         let mut guard = shared.mobs.write().unwrap();
         for mob in guard.values_mut() {
@@ -85,11 +87,45 @@ pub fn tick(shared: &Arc<Shared>, tick: u64, is_night: bool) {
                 continue;
             }
 
+            if mob.in_love > 0 {
+                mob.in_love -= 1;
+                lovers.push((mob.entity_id, mob.kind, mob.x, mob.y, mob.z));
+            }
             step_mob(shared, &players, mob, tick);
         }
         for id in &remove {
             guard.remove(id);
         }
+
+        // Breed: pair up nearby in-love mobs of the same kind.
+        let mut used = std::collections::HashSet::new();
+        for i in 0..lovers.len() {
+            let (ea, ka, xa, ya, za) = lovers[i];
+            if used.contains(&ea) {
+                continue;
+            }
+            for &(eb, kb, xb, _, zb) in lovers.iter().skip(i + 1) {
+                if used.contains(&eb) || ka != kb {
+                    continue;
+                }
+                if (xa - xb).powi(2) + (za - zb).powi(2) < 64.0 {
+                    used.insert(ea);
+                    used.insert(eb);
+                    if let Some(m) = guard.get_mut(&ea) {
+                        m.in_love = 0;
+                    }
+                    if let Some(m) = guard.get_mut(&eb) {
+                        m.in_love = 0;
+                    }
+                    babies.push((ka, (xa + xb) / 2.0, ya, (za + zb) / 2.0));
+                    break;
+                }
+            }
+        }
+    }
+
+    for (kind, x, y, z) in babies {
+        spawn_baby(shared, kind, x, y, z);
     }
     if !remove.is_empty() {
         for id in &remove {
@@ -374,6 +410,22 @@ fn try_spawn(shared: &Arc<Shared>, players: &[Player], is_night: bool) {
     if kind.name() == "villager" {
         villager_spawned(shared, entity_id);
     }
+}
+
+/// Spawn a baby animal (from breeding) at a position.
+fn spawn_baby(shared: &Arc<Shared>, kind: MobKind, x: f64, y: f64, z: f64) {
+    let entity_id = shared.next_entity_id();
+    let heading = rand::thread_rng().gen::<f32>() * std::f32::consts::TAU;
+    let mut mob = Mob::new(entity_id, kind, x, y, z, heading);
+    mob.baby = true;
+    shared.broadcast(cb::spawn_entity(
+        entity_id, mob.uuid, kind.type_id(), x, y, z, mob.yaw, mob.pitch, mob.yaw, 0, (0, 0, 0),
+    ));
+    let meta = mob.metadata();
+    if !meta.is_empty() {
+        shared.broadcast(cb::entity_metadata(entity_id, &meta));
+    }
+    shared.add_mob(mob);
 }
 
 /// Spawn a specific mob at a position (used by the /summon command and mods).

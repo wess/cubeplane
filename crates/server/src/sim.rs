@@ -126,29 +126,102 @@ pub fn fluid_tick(shared: &Arc<Shared>) {
         }
         let level = block::prop_index(state, "level").unwrap_or(0);
         let range: u32 = if name == "water" { 7 } else { 3 };
+
+        // Infinite water source: a flowing cell flanked by ≥2 source blocks
+        // becomes a source itself.
+        if name == "water" && level > 0 {
+            let sources = [(x + 1, z), (x - 1, z), (x, z + 1), (x, z - 1)]
+                .iter()
+                .filter(|(nx, nz)| {
+                    let s = get(shared, *nx, y, *nz);
+                    block::name_of(s) == "water" && block::prop_index(s, "level") == Some(0)
+                })
+                .count();
+            if sources >= 2 {
+                set(shared, x, y, z, state_with_level("water", 0));
+                continue;
+            }
+        }
         if level >= range {
             continue;
         }
 
         // Flow straight down as a fresh falling column.
         if block::is_air(get(shared, x, y - 1, z)) {
-            set(shared, x, y - 1, z, state_with_level(name, 0));
-            shared.schedule_fluid(x, y - 1, z);
+            place_fluid(shared, x, y - 1, z, name, 0);
             continue;
         }
         // Otherwise spread outward at one higher level.
         for (nx, nz) in [(x + 1, z), (x - 1, z), (x, z + 1), (x, z - 1)] {
             if block::is_air(get(shared, nx, y, nz)) {
-                set(shared, nx, y, nz, state_with_level(name, level + 1));
-                shared.schedule_fluid(nx, y, nz);
+                place_fluid(shared, nx, y, nz, name, level + 1);
             }
         }
     }
 }
 
+/// Place flowing fluid at a cell — unless it meets the opposite fluid, in which
+/// case it solidifies (water+lava → stone/cobblestone/obsidian).
+fn place_fluid(shared: &Arc<Shared>, x: i32, y: i32, z: i32, name: &str, level: u32) {
+    let opposite = if name == "water" { "lava" } else { "water" };
+    let mut opp_source = false;
+    let mut opp_any = false;
+    for (nx, ny, nz) in [(x + 1, y, z), (x - 1, y, z), (x, y + 1, z), (x, y - 1, z), (x, y, z + 1), (x, y, z - 1)] {
+        let s = get(shared, nx, ny, nz);
+        if block::name_of(s) == opposite {
+            opp_any = true;
+            if block::prop_index(s, "level") == Some(0) {
+                opp_source = true;
+            }
+        }
+    }
+    if opp_any {
+        // Lava meeting water: lava source → obsidian, flowing lava → cobblestone.
+        // Water flowing onto lava → stone.
+        let result = if name == "water" {
+            if opp_source { "obsidian" } else { "cobblestone" }
+        } else {
+            "stone"
+        };
+        if let Some(state) = block::state_by_name(result) {
+            set(shared, x, y, z, state);
+        }
+        return;
+    }
+    set(shared, x, y, z, state_with_level(name, level));
+    shared.schedule_fluid(x, y, z);
+}
+
 fn state_with_level(fluid: &str, level: u32) -> u16 {
     let base = block::state_by_name(fluid).unwrap_or(block::WATER);
     block::with_prop(base, "level", level)
+}
+
+// ---------------------------------------------------------------------------
+// Gravity (falling sand / gravel)
+// ---------------------------------------------------------------------------
+
+fn is_gravity(name: &str) -> bool {
+    name == "sand" || name == "red_sand" || name == "gravel" || name.ends_with("concrete_powder")
+}
+
+/// If a gravity block at `(x,y,z)` is unsupported, drop it to the lowest air,
+/// then let whatever is above fall in turn.
+pub fn gravity_check(shared: &Arc<Shared>, x: i32, y: i32, z: i32) {
+    let state = get(shared, x, y, z);
+    if !is_gravity(block::name_of(state)) {
+        return;
+    }
+    let mut ny = y;
+    while ny > cubeplane_world::chunk::MIN_Y + 1 && block::is_air(get(shared, x, ny - 1, z)) {
+        ny -= 1;
+    }
+    if ny < y {
+        set(shared, x, y, z, block::AIR);
+        set(shared, x, ny, z, state);
+        // The block that was above the old position may now fall too.
+        gravity_check(shared, x, y + 1, z);
+    }
 }
 
 // ---------------------------------------------------------------------------

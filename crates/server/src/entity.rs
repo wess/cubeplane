@@ -136,6 +136,10 @@ pub struct Mob {
     pub heading: f32,
     /// Cosmetic variant (e.g. sheep wool colour 0-15).
     pub variant: u8,
+    /// Whether this is a baby animal.
+    pub baby: bool,
+    /// Ticks remaining in "love mode" for breeding (0 = not breeding).
+    pub in_love: u32,
     /// Ticks until the mob may attack again.
     pub attack_cooldown: u32,
     /// Ticks remaining to play the death animation before removal; `None`
@@ -158,17 +162,23 @@ impl Mob {
             on_ground: false,
             heading,
             variant: 0,
+            baby: false,
+            in_love: 0,
             attack_cooldown: 0,
             dying: None,
         }
     }
 
-    /// Cosmetic metadata for this mob (e.g. sheep wool colour), if any.
+    /// Cosmetic metadata for this mob (baby flag, sheep wool colour, …).
     pub fn metadata(&self) -> Vec<crate::clientbound::Meta> {
-        match self.kind.name() {
-            "sheep" => vec![crate::clientbound::Meta::Byte(17, (self.variant & 0x0f) as i8)],
-            _ => Vec::new(),
+        let mut m = Vec::new();
+        if self.baby {
+            m.push(crate::clientbound::Meta::Bool(16, true)); // ageable: is baby
         }
+        if self.kind.name() == "sheep" {
+            m.push(crate::clientbound::Meta::Byte(17, (self.variant & 0x0f) as i8));
+        }
+        m
     }
 
     /// Whether the mob is alive (not in its death animation).

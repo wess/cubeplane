@@ -797,6 +797,24 @@ fn interact_entity(shared: &Arc<Shared>, player: &Player, target: i32) {
         } else {
             open_merchant(player);
         }
+        return;
+    }
+
+    // Feeding a passive animal wheat puts it into love mode (breeding).
+    let held = player.inventory(|inv| inv.held(player.state().held_slot));
+    let is_wheat = item::name_of(held.id) == Some("wheat");
+    let feedable = shared
+        .with_mob(target, |m| !m.kind.hostile() && m.kind.name() != "villager")
+        .unwrap_or(false);
+    if is_wheat && feedable {
+        shared.with_mob(target, |m| m.in_love = 600);
+        if player.gamemode() != 1 {
+            let held_slot = player.state().held_slot;
+            let after = player.inventory(|inv| inv.consume_held(held_slot));
+            player.set_slot(crate::inventory::HOTBAR_START + held_slot as usize, after);
+        }
+        let (mx, my, mz) = shared.with_mob(target, |m| (m.x, m.y, m.z)).unwrap_or((0.0, 0.0, 0.0));
+        shared.broadcast(cb::sound_effect("entity.generic.eat", 6, mx, my, mz, 1.0, 1.0));
     }
 }
 
@@ -1166,6 +1184,8 @@ fn break_block(shared: &Arc<Shared>, player: &Player, x: i32, y: i32, z: i32, cr
     }
     // Fluids can now flow into the gap; refresh redstone if it was a component.
     shared.schedule_fluid(x, y, z);
+    // Whatever sat on top of the broken block may now fall.
+    crate::sim::gravity_check(shared, x, y + 1, z);
     if crate::sim::is_redstone(cubeplane_world::block::name_of(previous)) {
         crate::sim::redstone_update(shared, x, y, z);
     }
@@ -1217,6 +1237,7 @@ fn place_block(shared: &Arc<Shared>, player: &Player, x: i32, y: i32, z: i32, fa
     }
     // Let fluids flow toward / from the change, and update redstone.
     shared.schedule_fluid(px, py, pz);
+    crate::sim::gravity_check(shared, px, py, pz);
     if crate::sim::is_redstone(cubeplane_world::block::name_of(state)) {
         crate::sim::redstone_update(shared, px, py, pz);
     }
