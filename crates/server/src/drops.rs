@@ -164,8 +164,10 @@ fn tick_items(shared: &Arc<Shared>) {
 
 fn tick_projectiles(shared: &Arc<Shared>) {
     let players = shared.players();
+    let mobs = shared.mobs();
     let mut remove = Vec::new();
     let mut hits = Vec::new(); // (player, damage)
+    let mut mob_hits = Vec::new(); // (mob entity id, x, z, damage)
 
     {
         let mut guard = shared.projectiles.write().unwrap();
@@ -186,15 +188,30 @@ fn tick_projectiles(shared: &Arc<Shared>) {
                 continue;
             }
 
-            // Hit a player?
-            if let Some(player) = players.iter().filter(|pl| !pl.is_dead()).find(|pl| {
-                let s = pl.state();
-                let dx = s.x - p.x;
-                let dy = (s.y + 1.0) - p.y;
-                let dz = s.z - p.z;
-                dx * dx + dy * dy + dz * dz < 1.2
-            }) {
+            // Hit a player (not the owner)?
+            let hit_player = players
+                .iter()
+                .filter(|pl| !pl.is_dead() && pl.entity_id != p.owner)
+                .find(|pl| {
+                    let s = pl.state();
+                    let dx = s.x - p.x;
+                    let dy = (s.y + 1.0) - p.y;
+                    let dz = s.z - p.z;
+                    dx * dx + dy * dy + dz * dz < 1.2
+                });
+            // Hit a mob (not the owner)?
+            let hit_mob = mobs.iter().filter(|m| m.alive() && m.entity_id != p.owner).find(|m| {
+                let dx = m.x - p.x;
+                let dy = (m.y + 1.0) - p.y;
+                let dz = m.z - p.z;
+                dx * dx + dy * dy + dz * dz < 1.6
+            });
+
+            if let Some(player) = hit_player {
                 hits.push((player.clone(), p.damage));
+                remove.push(p.entity_id);
+            } else if let Some(m) = hit_mob {
+                mob_hits.push((m.entity_id, m.x, m.z, p.damage));
                 remove.push(p.entity_id);
             } else {
                 shared.broadcast(cb::entity_teleport(p.entity_id, p.x, p.y, p.z, 0.0, 0.0, false));
@@ -207,6 +224,12 @@ fn tick_projectiles(shared: &Arc<Shared>) {
 
     for (player, damage) in hits {
         combat::damage_player(shared, &player, damage, "was shot");
+    }
+    for (eid, mx, mz, damage) in mob_hits {
+        shared.with_mob(eid, |m| m.health -= damage);
+        shared.broadcast(cb::hurt_animation(eid, 0.0));
+        shared.broadcast(cb::entity_status(eid, 2));
+        shared.broadcast(cb::sound_effect("entity.generic.hurt", 6, mx, 64.0, mz, 1.0, 1.0));
     }
     if !remove.is_empty() {
         shared.broadcast(cb::remove_entities(&remove));

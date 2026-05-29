@@ -15,7 +15,8 @@ use crate::ids::{login_cb, play_cb, status_cb};
 use crate::item::ItemStack;
 use crate::registry;
 
-/// Write an item stack in the `slot` wire format (no NBT).
+/// Write an item stack in the `slot` wire format, including a `Damage` tag for
+/// damaged tools.
 fn write_slot(b: &mut BytesMut, stack: ItemStack) {
     if stack.is_empty() {
         b.write_bool(false);
@@ -23,7 +24,12 @@ fn write_slot(b: &mut BytesMut, stack: ItemStack) {
         b.write_bool(true);
         b.write_varint(stack.id);
         b.write_i8(stack.count as i8);
-        b.write_u8(0); // optionalNbt absent = TAG_End
+        if stack.damage > 0 {
+            let nbt = cubeplane_nbt::Nbt::compound().put_int("Damage", stack.damage as i32);
+            b.write_bytes(&nbt.to_bytes_named(""));
+        } else {
+            b.write_u8(0); // optionalNbt absent = TAG_End
+        }
     }
 }
 

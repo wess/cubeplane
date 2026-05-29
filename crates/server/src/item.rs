@@ -36,16 +36,18 @@ pub struct ItemDef {
 pub struct ItemStack {
     pub id: i32,
     pub count: u8,
+    /// Durability damage taken (0 = pristine). Only meaningful for tools.
+    pub damage: u16,
 }
 
 impl ItemStack {
-    pub const EMPTY: ItemStack = ItemStack { id: 0, count: 0 };
+    pub const EMPTY: ItemStack = ItemStack { id: 0, count: 0, damage: 0 };
 
     pub fn new(id: i32, count: u8) -> Self {
         if id == 0 || count == 0 {
             ItemStack::EMPTY
         } else {
-            ItemStack { id, count }
+            ItemStack { id, count, damage: 0 }
         }
     }
 
@@ -56,6 +58,39 @@ impl ItemStack {
     pub fn def(&self) -> Option<&'static ItemDef> {
         def(self.id)
     }
+}
+
+/// Maximum durability for a tool/weapon/armour item, if it is damageable.
+pub fn max_durability(id: i32) -> Option<u16> {
+    let name = name_of(id)?;
+    let d = match name {
+        n if n.starts_with("wooden_") || n.starts_with("golden_") => 59,
+        n if n.starts_with("stone_") => 131,
+        n if n.starts_with("iron_") && is_tool_name(n) => 250,
+        n if n.starts_with("diamond_") => 1561,
+        n if n.starts_with("netherite_") => 2031,
+        "bow" => 384,
+        "shield" => 336,
+        "fishing_rod" => 64,
+        "flint_and_steel" => 64,
+        "iron_helmet" => 165,
+        "iron_chestplate" => 240,
+        "iron_leggings" => 225,
+        "iron_boots" => 195,
+        "leather_helmet" | "leather_boots" => 55,
+        "leather_chestplate" => 80,
+        "leather_leggings" => 75,
+        _ => return None,
+    };
+    Some(d)
+}
+
+fn is_tool_name(n: &str) -> bool {
+    n.ends_with("_sword")
+        || n.ends_with("_pickaxe")
+        || n.ends_with("_axe")
+        || n.ends_with("_shovel")
+        || n.ends_with("_hoe")
 }
 
 macro_rules! items {
@@ -200,5 +235,12 @@ mod tests {
         assert!(ItemStack::new(0, 5).is_empty());
         assert!(ItemStack::new(5, 0).is_empty());
         assert!(!ItemStack::new(1, 1).is_empty());
+    }
+
+    #[test]
+    fn durability_table() {
+        assert_eq!(max_durability(id_any("iron_sword").unwrap()), Some(250));
+        assert_eq!(max_durability(id_any("bow").unwrap()), Some(384));
+        assert_eq!(max_durability(id_any("stone").unwrap()), None); // blocks don't wear
     }
 }

@@ -21,8 +21,15 @@ fn read_slot<B: Buf>(b: &mut B) -> Result<ItemStack> {
     // optionalNbt: a lone 0x00 (TAG_End) means none; otherwise a named
     // compound. `Nbt::from_bytes` consumes exactly the right bytes in both
     // cases (it reads the type byte and, for non-compound, stops).
-    let _ = cubeplane_nbt::Nbt::from_bytes(b);
-    Ok(ItemStack::new(id, count))
+    let mut stack = ItemStack::new(id, count);
+    if let Ok(nbt) = cubeplane_nbt::Nbt::from_bytes(b) {
+        if let cubeplane_nbt::Value::Compound(m) = nbt.into_value() {
+            if let Some(cubeplane_nbt::Value::Int(d)) = m.get("Damage") {
+                stack.damage = (*d).max(0) as u16;
+            }
+        }
+    }
+    Ok(stack)
 }
 
 /// A decoded, actionable serverbound play packet. Some fields are parsed for

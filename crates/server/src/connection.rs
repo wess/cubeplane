@@ -512,7 +512,9 @@ async fn play_loop<R: AsyncRead + Unpin>(
                 player.send(cb::acknowledge_block_change(sequence));
             }
             Play::UseItem => {
-                try_eat(player);
+                if !try_shoot_bow(shared, player) {
+                    try_eat(player);
+                }
             }
             Play::CreativeSlot { slot, stack } => {
                 // Direct slot edits are only legitimate in creative mode.
@@ -548,6 +550,9 @@ async fn play_loop<R: AsyncRead + Unpin>(
                         None => 1.0,
                     };
                     mobs::player_attack(shared, player, target, damage);
+                    if player.gamemode() != 1 {
+                        damage_held_tool(shared, player);
+                    }
                 } else {
                     // Right-click interact: ride a vehicle or trade with a villager.
                     interact_entity(shared, player, target);
@@ -1034,6 +1039,53 @@ fn try_toggle_lever(shared: &Arc<Shared>, player: &Player, x: i32, y: i32, z: i3
     true
 }
 
+/// Fire an arrow if the player is holding a bow (and has arrows / is creative).
+/// Returns true if a shot was fired.
+fn try_shoot_bow(shared: &Arc<Shared>, player: &Player) -> bool {
+    let held = player.inventory(|i| i.held(player.state().held_slot));
+    if item::name_of(held.id) != Some("bow") {
+        return false;
+    }
+    let arrow = item::id_any("arrow").unwrap_or(0);
+    let creative = player.gamemode() == 1;
+    if !creative && !player.inventory(|i| i.has(arrow, 1)) {
+        return false;
+    }
+    if !creative {
+        player.inventory(|i| i.remove(arrow, 1));
+        player.sync_inventory();
+        damage_held_tool(shared, player);
+    }
+
+    // Direction from the player's look (Minecraft yaw/pitch conventions).
+    let s = player.state();
+    let yaw = (s.yaw as f64).to_radians();
+    let pitch = (s.pitch as f64).to_radians();
+    let dx = -yaw.sin() * pitch.cos();
+    let dy = -pitch.sin();
+    let dz = yaw.cos() * pitch.cos();
+    drops::spawn_arrow(shared, player.entity_id, s.x, s.y + 1.5, s.z, dx, dy, dz, 5.0);
+    true
+}
+
+/// Wear down the held tool/weapon by one point (survival), breaking it at 0.
+fn damage_held_tool(shared: &Arc<Shared>, player: &Player) {
+    let held = player.state().held_slot;
+    let mut stack = player.inventory(|i| i.held(held));
+    let Some(max) = item::max_durability(stack.id) else {
+        return;
+    };
+    stack.damage += 1;
+    let slot = crate::inventory::HOTBAR_START + held as usize;
+    if stack.damage >= max {
+        player.set_slot(slot, item::ItemStack::EMPTY);
+        let s = player.state();
+        shared.broadcast(cb::sound_effect("entity.item.break", 7, s.x, s.y, s.z, 1.0, 1.0));
+    } else {
+        player.set_slot(slot, stack);
+    }
+}
+
 /// Sleep in / set spawn at a bed. Returns true if a bed was clicked.
 fn try_use_bed(shared: &Arc<Shared>, player: &Player, x: i32, y: i32, z: i32) -> bool {
     let is_bed = {
@@ -1219,11 +1271,12 @@ fn break_block(shared: &Arc<Shared>, player: &Player, x: i32, y: i32, z: i32, cr
         }
     }
 
-    // Survival breaks drop the block's item.
+    // Survival breaks drop the block's item and wear the held tool.
     if !creative {
         if let Some(item_id) = item::item_for_block(previous) {
             drops::spawn_item(shared, item_id, 1, x as f64 + 0.5, y as f64 + 0.25, z as f64 + 0.5, 10);
         }
+        damage_held_tool(shared, player);
     }
     // Clean up a broken sign's stored text.
     if cubeplane_world::block::info(previous).name.ends_with("_sign") {
