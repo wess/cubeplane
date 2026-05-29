@@ -27,6 +27,18 @@ type ActiveButton = (u8, i32, i32, i32, u32);
 /// A pending block change: `(dim, x, y, z, target state, ticks remaining)`.
 type ScheduledChange = (u8, i32, i32, i32, u16, u32);
 
+/// Map a villager's accumulated trade experience to its level (1–5), using the
+/// vanilla 1.20.1 thresholds.
+pub fn level_from_xp(xp: i32) -> i32 {
+    match xp {
+        i32::MIN..=9 => 1,
+        10..=69 => 2,
+        70..=149 => 3,
+        150..=249 => 4,
+        _ => 5,
+    }
+}
+
 /// A furnace block entity: input/fuel/output plus cook & burn timers.
 #[derive(Clone, Default)]
 pub struct Furnace {
@@ -106,6 +118,8 @@ pub struct Shared {
     effects: RwLock<HashMap<i32, Vec<crate::effects::ActiveEffect>>>,
     /// Per-villager trade-use counts (entity id → uses per offer index).
     trade_uses: RwLock<HashMap<i32, Vec<u8>>>,
+    /// Per-villager trade experience (entity id → xp), drives trade level.
+    villager_xp: RwLock<HashMap<i32, i32>>,
     started: Instant,
 }
 
@@ -144,6 +158,7 @@ impl Shared {
             villagers: RwLock::new(HashMap::new()),
             effects: RwLock::new(HashMap::new()),
             trade_uses: RwLock::new(HashMap::new()),
+            villager_xp: RwLock::new(HashMap::new()),
             mods,
             server_key,
             started: Instant::now(),
@@ -630,6 +645,19 @@ impl Shared {
     /// Restock all villagers, clearing every trade's use count.
     pub fn restock_trades(&self) {
         self.trade_uses.write().unwrap().clear();
+    }
+
+    /// A villager's current trade level (1 = novice … 5 = master).
+    pub fn villager_level(&self, villager: i32) -> i32 {
+        level_from_xp(self.villager_xp.read().unwrap().get(&villager).copied().unwrap_or(0))
+    }
+
+    /// Add trade experience to a villager, returning its new level.
+    pub fn add_villager_xp(&self, villager: i32, xp: i32) -> i32 {
+        let mut map = self.villager_xp.write().unwrap();
+        let e = map.entry(villager).or_insert(0);
+        *e += xp;
+        level_from_xp(*e)
     }
 
     /// Fire an event into the mod runtime, if mods are enabled.

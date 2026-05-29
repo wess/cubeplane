@@ -1079,11 +1079,13 @@ fn talk_to_villager(shared: &Arc<Shared>, player: &Player, villager: i32, messag
     });
 }
 
-/// Villager trade offers for a profession: `(input1, output, input2)`. Unknown
-/// items are dropped so the list always type-checks against the registry.
-fn merchant_offers(profession: &str) -> Vec<(item::ItemStack, item::ItemStack, item::ItemStack)> {
+/// Villager trade offers a villager of `profession` and trade `level` (1–5)
+/// currently offers: `(input1, output, input2)`. Offers unlock with level
+/// (positionally), and unknown items are dropped so the list always type-checks.
+fn merchant_offers(profession: &str, level: i32) -> Vec<(item::ItemStack, item::ItemStack, item::ItemStack)> {
     // Each entry is `(buy_name, buy_count, give_name, give_count)` describing a
-    // trade where the player hands over `buy` and receives `give`.
+    // trade where the player hands over `buy` and receives `give`. Tables stay
+    // ordered so earlier offers belong to lower villager levels.
     let raw: &[(&str, u8, &str, u8)] = match profession {
         "farmer" => &[
             ("wheat", 20, "emerald", 1),
@@ -1142,8 +1144,12 @@ fn merchant_offers(profession: &str) -> Vec<(item::ItemStack, item::ItemStack, i
         ],
         _ => &[("emerald", 1, "bread", 6), ("stick", 32, "emerald", 1)],
     };
+    // Positional level gate: first two offers are novice, then one per level.
+    let required_level = |i: usize| -> i32 { if i < 2 { 1 } else { (i - 1) as i32 } };
     raw.iter()
-        .filter_map(|(bn, bc, gn, gc)| {
+        .enumerate()
+        .filter(|(i, _)| required_level(*i) <= level)
+        .filter_map(|(_, (bn, bc, gn, gc))| {
             let bid = item::id_any(bn)?;
             let gid = item::id_any(gn)?;
             Some((item::ItemStack::new(bid, *bc), item::ItemStack::new(gid, *gc), item::ItemStack::EMPTY))
@@ -1153,7 +1159,8 @@ fn merchant_offers(profession: &str) -> Vec<(item::ItemStack, item::ItemStack, i
 
 /// Open a villager trade window for a villager of the given profession.
 fn open_merchant(shared: &Arc<Shared>, player: &Player, villager: i32, profession: &'static str) {
-    let offers = merchant_offers(profession);
+    let level = shared.villager_level(villager);
+    let offers = merchant_offers(profession, level);
     let uses = shared.trade_uses(villager, offers.len());
     player.update(|s| {
         s.open_merchant = true;
@@ -1161,7 +1168,7 @@ fn open_merchant(shared: &Arc<Shared>, player: &Player, villager: i32, professio
         s.merchant_id = Some(villager);
     });
     player.send(cb::open_window(2, 18, &text::plain("Villager"))); // 18 = merchant menu
-    player.send(cb::trade_list(2, &offers, &uses, 1));
+    player.send(cb::trade_list(2, &offers, &uses, level));
 }
 
 /// Execute a selected trade against the player's inventory.
@@ -1172,7 +1179,8 @@ fn do_trade(shared: &Arc<Shared>, player: &Player, index: i32) {
     if !player.state().open_merchant {
         return;
     }
-    let offers = merchant_offers(profession);
+    let level = shared.villager_level(villager);
+    let offers = merchant_offers(profession, level);
     let Some((input, output, _)) = offers.get(index as usize) else {
         return;
     };
@@ -1193,12 +1201,18 @@ fn do_trade(shared: &Arc<Shared>, player: &Player, index: i32) {
     });
     if traded {
         shared.use_trade(villager, index as usize, offers.len());
+        // Each trade grants the villager XP, which can raise its level.
+        let new_level = shared.add_villager_xp(villager, 5);
         player.sync_inventory();
         let s = player.state();
         player.send(cb::sound_effect("entity.villager.yes", 6, s.x, s.y, s.z, 1.0, 1.0));
-        // Refresh the window so the client sees the updated use count.
+        if new_level > level {
+            player.send(cb::system_chat(&text::colored("The villager unlocked new trades!", "green"), false));
+        }
+        // Refresh the window so the client sees updated uses and any new offers.
+        let offers = merchant_offers(profession, new_level);
         let uses = shared.trade_uses(villager, offers.len());
-        player.send(cb::trade_list(2, &offers, &uses, 1));
+        player.send(cb::trade_list(2, &offers, &uses, new_level));
     } else {
         player.send(cb::system_chat(&text::colored("You don't have what that trade needs.", "red"), false));
     }
@@ -2159,7 +2173,8 @@ mod trade_tests {
     #[test]
     fn every_profession_has_resolvable_offers() {
         for prof in PROFESSIONS {
-            let offers = merchant_offers(prof);
+            // At master level all offers are unlocked.
+            let offers = merchant_offers(prof, 5);
             assert!(!offers.is_empty(), "{prof} had no offers");
             for (input, output, _) in &offers {
                 assert!(input.id != 0, "{prof} offer had unknown input");
@@ -2169,8 +2184,19 @@ mod trade_tests {
     }
 
     #[test]
+    fn higher_level_unlocks_more_trades() {
+        // A master villager offers at least as many trades as a novice, and the
+        // novice list is a prefix (level-gated) of the master list.
+        let novice = merchant_offers("farmer", 1);
+        let master = merchant_offers("farmer", 5);
+        assert!(master.len() >= novice.len());
+        assert!(!novice.is_empty());
+        assert!(master.len() > novice.len());
+    }
+
+    #[test]
     fn farmer_buys_wheat_for_emeralds() {
-        let offers = merchant_offers("farmer");
+        let offers = merchant_offers("farmer", 1);
         let emerald = crate::item::id_any("emerald").unwrap();
         let wheat = crate::item::id_any("wheat").unwrap();
         // First farmer trade: hand over wheat, receive an emerald.
@@ -2179,8 +2205,18 @@ mod trade_tests {
     }
 
     #[test]
+    fn xp_maps_to_levels() {
+        use crate::state::level_from_xp;
+        assert_eq!(level_from_xp(0), 1);
+        assert_eq!(level_from_xp(10), 2);
+        assert_eq!(level_from_xp(70), 3);
+        assert_eq!(level_from_xp(150), 4);
+        assert_eq!(level_from_xp(250), 5);
+    }
+
+    #[test]
     fn unknown_profession_falls_back() {
-        assert!(!merchant_offers("nonsense").is_empty());
+        assert!(!merchant_offers("nonsense", 5).is_empty());
     }
 
     #[test]
