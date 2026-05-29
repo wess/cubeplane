@@ -516,7 +516,7 @@ async fn play_loop<R: AsyncRead + Unpin>(
             }
             Play::UseItem => {
                 if !try_shoot_bow(shared, player) {
-                    try_eat(player);
+                    try_eat(shared, player);
                 }
             }
             Play::CreativeSlot { slot, stack } => {
@@ -1431,22 +1431,35 @@ fn place_block(shared: &Arc<Shared>, player: &Player, x: i32, y: i32, z: i32, fa
 }
 
 /// Eat the held food item if the player is hungry.
-fn try_eat(player: &Player) {
+fn try_eat(shared: &Arc<Shared>, player: &Player) {
     let held = player.state().held_slot;
     let stack = player.inventory(|inv| inv.held(held));
-    let Some((hunger, sat)) = stack.def().and_then(|d| match d.kind {
+
+    // Hunger/saturation from the curated food kind, plus an optional effect for
+    // special foods (golden apples heal-over-time, spider eyes poison).
+    let curated = stack.def().and_then(|d| match d.kind {
         item::ItemKind::Food(h, s) => Some((h, s)),
         _ => None,
-    }) else {
-        return;
+    });
+    let name = item::name_of(stack.id).unwrap_or("");
+    let effect: Option<(i32, i8, i32)> = match name {
+        "golden_apple" => Some((crate::effects::REGENERATION, 1, 5)),
+        "enchanted_golden_apple" => Some((crate::effects::REGENERATION, 1, 20)),
+        "spider_eye" => Some((crate::effects::POISON, 0, 4)),
+        _ => None,
+    };
+    let (hunger, sat) = match (curated, name) {
+        (Some(hs), _) => hs,
+        (None, "golden_apple") | (None, "enchanted_golden_apple") => (4, 9.6),
+        (None, "spider_eye") => (2, 3.2),
+        _ => return, // not edible
     };
 
     let needs_food = player.state().food < 20;
-    if !needs_food && player.gamemode() != 1 {
+    if !needs_food && effect.is_none() && player.gamemode() != 1 {
         return;
     }
 
-    // Restore hunger/saturation and consume one item (survival).
     let (health, food, saturation) = player.update(|s| {
         s.food = (s.food + hunger).min(20);
         s.saturation = (s.saturation + sat).min(s.food as f32);
@@ -1455,6 +1468,9 @@ fn try_eat(player: &Player) {
     player.send(cb::update_health(health, food, saturation));
     let s = player.state();
     player.send(cb::sound_effect("entity.generic.eat", 7, s.x, s.y, s.z, 0.8, 1.0));
+    if let Some((id, amp, secs)) = effect {
+        crate::effects::apply(shared, player, id, amp, secs);
+    }
     if player.gamemode() != 1 {
         let slot = crate::inventory::HOTBAR_START + held as usize;
         let after = player.inventory(|inv| inv.consume_held(held));
