@@ -11,6 +11,8 @@ use uuid::Uuid;
 pub const ITEM_ENTITY: i32 = 54;
 /// Entity type id for an arrow.
 pub const ARROW: i32 = 3;
+/// Entity type id for primed TNT.
+pub const TNT: i32 = 101;
 
 /// A handle to one of the game's living mob types (index into the generated
 /// [`crate::mobs_table::MOBS`] table). All ~80 living entities are available.

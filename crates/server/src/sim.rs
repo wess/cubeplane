@@ -7,6 +7,7 @@
 use std::sync::Arc;
 
 use rand::Rng;
+use uuid::Uuid;
 
 use cubeplane_world::block;
 
@@ -270,6 +271,40 @@ fn is_flammable(name: &str) -> bool {
         || name.ends_with("_leaves")
         || name.ends_with("_wool")
         || name == "oak_log"
+}
+
+// ---------------------------------------------------------------------------
+// TNT
+// ---------------------------------------------------------------------------
+
+/// Prime the TNT block at `(x,y,z)`: clear it, spawn a flashing TNT entity, and
+/// start an 80-tick fuse.
+pub fn ignite_tnt(shared: &Arc<Shared>, x: i32, y: i32, z: i32) {
+    set(shared, x, y, z, block::AIR);
+    let eid = shared.next_entity_id();
+    let (fx, fy, fz) = (x as f64 + 0.5, y as f64, z as f64 + 0.5);
+    shared.broadcast(cb::spawn_entity(
+        eid,
+        Uuid::new_v4(),
+        crate::entity::TNT,
+        fx,
+        fy,
+        fz,
+        0.0,
+        0.0,
+        0.0,
+        0,
+        (0, 0, 0),
+    ));
+    shared.add_tnt(eid, fx, fy, fz, 80);
+}
+
+/// Detonate any TNT whose fuse has expired.
+pub fn tnt_tick(shared: &Arc<Shared>) {
+    for (eid, x, y, z) in shared.tick_tnt() {
+        shared.broadcast(cb::remove_entities(&[eid]));
+        crate::mobs::explode(shared, x, y, z, 4.0);
+    }
 }
 
 // ---------------------------------------------------------------------------

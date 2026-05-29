@@ -315,6 +315,7 @@ async fn game_loop(shared: Arc<Shared>) {
         let is_night = (13_000..23_000).contains(&time_of_day);
         mobs::tick(&shared, ticks, is_night);
         drops::tick(&shared);
+        sim::tnt_tick(&shared);
 
         // One mod tick per second keeps the JS bridge lightly loaded.
         if ticks.is_multiple_of(20) {

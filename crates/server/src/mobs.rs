@@ -183,7 +183,7 @@ fn drop_loot(shared: &Arc<Shared>, kind: MobKind, x: f64, y: f64, z: f64) {
 
 /// Blow up at `(cx,cy,cz)`: clear blocks in a sphere, hurt nearby players, and
 /// send the Explosion packet (which drives the client's particles and sound).
-fn explode(shared: &Arc<Shared>, cx: f64, cy: f64, cz: f64, power: f32) {
+pub(crate) fn explode(shared: &Arc<Shared>, cx: f64, cy: f64, cz: f64, power: f32) {
     let r = power.ceil() as i32;
     let (bx, by, bz) = (cx.floor() as i32, cy.floor() as i32, cz.floor() as i32);
     let mut offsets = Vec::new();

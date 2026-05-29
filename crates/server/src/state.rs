@@ -20,6 +20,9 @@ use crate::player::Player;
 /// Number of slots in a chest container.
 pub const CONTAINER_SIZE: usize = 27;
 
+/// Primed TNT record: `(entity id, x, y, z, fuse ticks)`.
+type PrimedTnt = (i32, f64, f64, f64, u32);
+
 /// A furnace block entity: input/fuel/output plus cook & burn timers.
 #[derive(Clone, Default)]
 pub struct Furnace {
@@ -63,6 +66,8 @@ pub struct Shared {
     pub(crate) furnaces: RwLock<HashMap<(i32, i32, i32), Furnace>>,
     /// Cells queued for fluid-flow evaluation.
     fluid_queue: Mutex<std::collections::VecDeque<(i32, i32, i32)>>,
+    /// Primed TNT: `(entity id, x, y, z, fuse ticks)`.
+    primed_tnt: Mutex<Vec<PrimedTnt>>,
     next_entity_id: AtomicI32,
     total_joins: AtomicU64,
     /// World time of day in ticks (0..24000), advanced by the game loop.
@@ -103,6 +108,7 @@ impl Shared {
             signs: RwLock::new(HashMap::new()),
             furnaces: RwLock::new(HashMap::new()),
             fluid_queue: Mutex::new(std::collections::VecDeque::new()),
+            primed_tnt: Mutex::new(Vec::new()),
             next_entity_id: AtomicI32::new(1),
             total_joins: AtomicU64::new(0),
             world_time: std::sync::atomic::AtomicI64::new(1000),
@@ -235,6 +241,27 @@ impl Shared {
         let mut q = self.fluid_queue.lock().unwrap();
         let n = max.min(q.len());
         q.drain(..n).collect()
+    }
+
+    /// Prime a TNT entity with a fuse.
+    pub fn add_tnt(&self, eid: i32, x: f64, y: f64, z: f64, fuse: u32) {
+        self.primed_tnt.lock().unwrap().push((eid, x, y, z, fuse));
+    }
+
+    /// Tick all primed TNT, returning those whose fuse just ran out.
+    pub fn tick_tnt(&self) -> Vec<(i32, f64, f64, f64)> {
+        let mut tnt = self.primed_tnt.lock().unwrap();
+        let mut exploded = Vec::new();
+        tnt.retain_mut(|(eid, x, y, z, fuse)| {
+            *fuse = fuse.saturating_sub(1);
+            if *fuse == 0 {
+                exploded.push((*eid, *x, *y, *z));
+                false
+            } else {
+                true
+            }
+        });
+        exploded
     }
 
     /// Ensure a furnace block entity exists at `pos`.

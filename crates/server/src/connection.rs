@@ -502,7 +502,8 @@ async fn play_loop<R: AsyncRead + Unpin>(
             }
             Play::BlockPlace { x, y, z, face, sequence } => {
                 // Interacting with a lever/chest/sign takes priority over placing.
-                if !try_toggle_lever(shared, player, x, y, z)
+                if !try_flint(shared, player, x, y, z, face)
+                    && !try_toggle_lever(shared, player, x, y, z)
                     && !try_use_bed(shared, player, x, y, z)
                     && !try_open_container(shared, player, x, y, z)
                     && !try_open_furnace(shared, player, x, y, z)
@@ -1040,6 +1041,45 @@ fn try_toggle_lever(shared: &Arc<Shared>, player: &Player, x: i32, y: i32, z: i3
     shared.broadcast(cb::block_update(x, y, z, toggled));
     if dim == 0 {
         crate::sim::redstone_update(shared, x, y, z);
+    }
+    true
+}
+
+/// Use flint & steel: ignite TNT, or light a fire on the clicked face.
+/// Returns true if flint & steel was used.
+fn try_flint(shared: &Arc<Shared>, player: &Player, x: i32, y: i32, z: i32, face: i32) -> bool {
+    let held = player.inventory(|i| i.held(player.state().held_slot));
+    if item::name_of(held.id) != Some("flint_and_steel") {
+        return false;
+    }
+    let dim = player.state().dimension;
+    if dim != 0 {
+        return true; // ignition sims are overworld-only; just consume the click
+    }
+    let clicked = { shared.dim_world(0).lock().unwrap().get_block(x, y, z) };
+    if cubeplane_world::block::name_of(clicked) == "tnt" {
+        crate::sim::ignite_tnt(shared, x, y, z);
+    } else {
+        // Light a fire on the face the player clicked.
+        let (dx, dy, dz) = match face {
+            0 => (0, -1, 0),
+            1 => (0, 1, 0),
+            2 => (0, 0, -1),
+            3 => (0, 0, 1),
+            4 => (-1, 0, 0),
+            _ => (1, 0, 0),
+        };
+        let (fx, fy, fz) = (x + dx, y + dy, z + dz);
+        let air = { shared.dim_world(0).lock().unwrap().get_block(fx, fy, fz) };
+        if cubeplane_world::block::is_air(air) {
+            if let Some(fire) = cubeplane_world::block::state_by_name("fire") {
+                shared.dim_world(0).lock().unwrap().set_block(fx, fy, fz, fire);
+                shared.broadcast(cb::block_update(fx, fy, fz, fire));
+            }
+        }
+    }
+    if player.gamemode() != 1 {
+        damage_held_tool(shared, player);
     }
     true
 }
