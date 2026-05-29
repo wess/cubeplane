@@ -92,8 +92,10 @@ pub fn join_game(
     b.write_bool(false); // isHardcore
     b.write_u8(gamemode);
     b.write_i8(-1); // previousGameMode = none
-    b.write_varint(1); // world count
-    b.write_string(registry::DIMENSION_NAME);
+    b.write_varint(registry::DIMENSIONS.len() as i32); // world count
+    for name in registry::DIMENSIONS {
+        b.write_string(name);
+    }
     b.write_bytes(&registry::codec().to_bytes_named(""));
     b.write_string(registry::DIMENSION_TYPE);
     b.write_string(registry::DIMENSION_NAME);
@@ -338,11 +340,11 @@ pub fn death_combat_event(player_entity_id: i32, message: &Json) -> BytesMut {
     b
 }
 
-/// Respawn the player into a (re)loaded world. `copy_metadata` keeps attributes.
-pub fn respawn(gamemode: u8, is_flat: bool) -> BytesMut {
+/// Respawn the player into a (re)loaded world in dimension `dim`.
+pub fn respawn(dim: u8, gamemode: u8, is_flat: bool) -> BytesMut {
     let mut b = pkt(play_cb::RESPAWN);
-    b.write_string(registry::DIMENSION_TYPE);
-    b.write_string(registry::DIMENSION_NAME);
+    b.write_string(registry::dim_id(dim));
+    b.write_string(registry::dim_id(dim));
     b.write_i64(0); // hashed seed
     b.write_i8(gamemode as i8);
     b.write_u8(255); // previous gamemode = -1 (none)

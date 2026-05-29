@@ -13,6 +13,15 @@ pub const DIMENSION_TYPE: &str = "minecraft:overworld";
 /// Identifier of the world players spawn in.
 pub const DIMENSION_NAME: &str = "minecraft:overworld";
 
+/// All dimension identifiers, indexed by dimension number (0/1/2).
+pub const DIMENSIONS: [&str; 3] =
+    ["minecraft:overworld", "minecraft:the_nether", "minecraft:the_end"];
+
+/// The dimension-type / world identifier for a dimension number.
+pub fn dim_id(dim: u8) -> &'static str {
+    DIMENSIONS[(dim as usize).min(2)]
+}
+
 /// Build the full registry codec compound.
 pub fn codec() -> Nbt {
     Nbt::compound()
@@ -27,33 +36,47 @@ fn registry_wrapper(type_name: &str, entries: Vec<Value>) -> Nbt {
         .put_list("value", entries)
 }
 
-fn dimension_registry() -> Nbt {
-    let element = Nbt::compound()
-        .put_bool("piglin_safe", false)
-        .put_bool("has_raids", true)
+/// One dimension-type element. All dimensions reuse cubeplane's −64..320 chunk
+/// shape so a single chunk encoder serves them; only the flavour differs.
+fn dim_element(skylight: bool, ceiling: bool, ultrawarm: bool, ambient: f32, effects: &str) -> Nbt {
+    Nbt::compound()
+        .put_bool("piglin_safe", ultrawarm)
+        .put_bool("has_raids", skylight)
         .put_int("monster_spawn_light_level", 0)
         .put_int("monster_spawn_block_light_limit", 0)
-        .put_bool("natural", true)
-        .put_float("ambient_light", 0.0)
+        .put_bool("natural", !ceiling)
+        .put_float("ambient_light", ambient)
         .put_string("infiniburn", "#minecraft:infiniburn_overworld")
-        .put_bool("respawn_anchor_works", false)
-        .put_bool("has_skylight", true)
-        .put_bool("bed_works", true)
-        .put_string("effects", "minecraft:overworld")
+        .put_bool("respawn_anchor_works", ultrawarm)
+        .put_bool("has_skylight", skylight)
+        .put_bool("bed_works", skylight)
+        .put_string("effects", effects)
         .put_int("min_y", cubeplane_world::chunk::MIN_Y)
         .put_int("height", cubeplane_world::chunk::WORLD_HEIGHT)
         .put_int("logical_height", cubeplane_world::chunk::WORLD_HEIGHT)
         .put_double("coordinate_scale", 1.0)
-        .put_bool("ultrawarm", false)
-        .put_bool("has_ceiling", false);
+        .put_bool("ultrawarm", ultrawarm)
+        .put_bool("has_ceiling", ceiling)
+}
 
-    let entry = Nbt::compound()
-        .put_string("name", DIMENSION_TYPE)
-        .put_int("id", 0)
-        .put_compound("element", element)
-        .into_value();
-
-    registry_wrapper("minecraft:dimension_type", vec![entry])
+fn dimension_registry() -> Nbt {
+    let dims = [
+        ("minecraft:overworld", dim_element(true, false, false, 0.0, "minecraft:overworld")),
+        ("minecraft:the_nether", dim_element(false, true, true, 0.1, "minecraft:the_nether")),
+        ("minecraft:the_end", dim_element(false, false, false, 0.0, "minecraft:the_end")),
+    ];
+    let entries = dims
+        .into_iter()
+        .enumerate()
+        .map(|(id, (name, element))| {
+            Nbt::compound()
+                .put_string("name", name)
+                .put_int("id", id as i32)
+                .put_compound("element", element)
+                .into_value()
+        })
+        .collect();
+    registry_wrapper("minecraft:dimension_type", entries)
 }
 
 fn biome_registry() -> Nbt {

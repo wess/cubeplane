@@ -17,7 +17,7 @@ pub type ChunkLoader = Box<dyn Fn(i32, i32) -> Option<Vec<block::StateId>> + Sen
 
 pub use block::StateId;
 pub use chunk::{Chunk, MIN_Y, SECTION_COUNT, WORLD_HEIGHT};
-pub use gen::{FlatGenerator, Generator, TerrainGenerator};
+pub use gen::{EndGenerator, FlatGenerator, Generator, NetherGenerator, TerrainGenerator};
 
 /// A lazily-generated, in-memory world.
 pub struct World {

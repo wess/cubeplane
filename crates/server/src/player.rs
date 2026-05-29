@@ -47,6 +47,8 @@ pub struct PlayerState {
     pub talking_to: Option<i32>,
     /// Bed spawn point, if the player has slept in a bed.
     pub spawn_point: Option<(f64, f64, f64)>,
+    /// Current dimension (0 overworld, 1 nether, 2 end).
+    pub dimension: u8,
 }
 
 /// Maximum player health, in half-hearts.
@@ -76,6 +78,7 @@ impl PlayerState {
             riding: None,
             talking_to: None,
             spawn_point: None,
+            dimension: 0,
         }
     }
 

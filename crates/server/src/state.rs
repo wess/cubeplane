@@ -9,7 +9,7 @@ use std::time::Instant;
 
 use bytes::BytesMut;
 use cubeplane_mods::ModRuntime;
-use cubeplane_world::World;
+use cubeplane_world::{EndGenerator, NetherGenerator, World};
 
 use crate::ai::Turn;
 use crate::config::{AiConfig, Config};
@@ -47,6 +47,9 @@ pub struct VillagerBrain {
 pub struct Shared {
     pub config: Config,
     pub world: Mutex<World>,
+    /// The Nether and End dimensions (overworld is `world`).
+    nether: Mutex<World>,
+    the_end: Mutex<World>,
     players: RwLock<HashMap<i32, Player>>,
     pub(crate) mobs: RwLock<HashMap<i32, Mob>>,
     pub(crate) items: RwLock<HashMap<i32, ItemEntity>>,
@@ -87,6 +90,8 @@ impl Shared {
         Arc::new(Shared {
             config,
             world: Mutex::new(world),
+            nether: Mutex::new(World::new(Arc::new(NetherGenerator))),
+            the_end: Mutex::new(World::new(Arc::new(EndGenerator))),
             players: RwLock::new(HashMap::new()),
             mobs: RwLock::new(HashMap::new()),
             items: RwLock::new(HashMap::new()),
@@ -106,6 +111,15 @@ impl Shared {
             server_key,
             started: Instant::now(),
         })
+    }
+
+    /// The world for a dimension number (0 overworld, 1 nether, 2 end).
+    pub fn dim_world(&self, dim: u8) -> &Mutex<World> {
+        match dim {
+            1 => &self.nether,
+            2 => &self.the_end,
+            _ => &self.world,
+        }
     }
 
     /// Allocate a fresh, unique entity id.

@@ -89,6 +89,88 @@ impl TerrainGenerator {
     }
 }
 
+impl TerrainGenerator {
+    /// Rarely place a structure (surface hut or underground dungeon) per chunk.
+    fn place_structures(&self, chunk: &mut Chunk, cx: i32, cz: i32) {
+        let roll = hash_to_unit(self.seed ^ 0x57A2, cx as i64, cz as i64);
+        if roll > 0.985 {
+            // Surface hut around a fixed interior column.
+            let (lx, lz) = (5usize, 5usize);
+            let surface = self.height_at(cx * 16 + lx as i32, cz * 16 + lz as i32);
+            if surface > self.sea_level {
+                self.build_hut(chunk, lx, surface + 1, lz);
+            }
+        } else if roll < 0.012 {
+            // Underground dungeon.
+            let y = -24 + (hash_to_unit(self.seed ^ 0x0D, cx as i64, cz as i64) * 16.0) as i32;
+            self.build_dungeon(chunk, 5, y, 5);
+        }
+    }
+
+    fn build_hut(&self, chunk: &mut Chunk, x: usize, y: i32, z: usize) {
+        let planks = block::OAK_PLANKS;
+        let glass = block::GLASS;
+        for dx in 0..5usize {
+            for dz in 0..5usize {
+                for dy in 0..4i32 {
+                    let (bx, bz) = (x + dx, z + dz);
+                    if bx >= 16 || bz >= 16 {
+                        continue;
+                    }
+                    let edge = dx == 0 || dx == 4 || dz == 0 || dz == 4;
+                    let block = if dy == 0 || dy == 3 {
+                        planks // floor & roof
+                    } else if edge {
+                        // Walls, with a window in the middle of each side.
+                        if (dx == 2 || dz == 2) && dy == 1 {
+                            glass
+                        } else {
+                            planks
+                        }
+                    } else {
+                        block::AIR
+                    };
+                    chunk.set_block(bx, y + dy, bz, block);
+                }
+            }
+        }
+        // Doorway.
+        chunk.set_block(x, y + 1, z + 2, block::AIR);
+        chunk.set_block(x, y + 2, z + 2, block::AIR);
+    }
+
+    fn build_dungeon(&self, chunk: &mut Chunk, x: usize, y: i32, z: usize) {
+        let cobble = block::COBBLESTONE;
+        let mossy = block::state_by_name("mossy_cobblestone").unwrap_or(cobble);
+        let chest = block::CHEST;
+        let spawner = block::state_by_name("spawner").unwrap_or(cobble);
+        for dx in 0..5usize {
+            for dz in 0..5usize {
+                for dy in 0..4i32 {
+                    let (bx, bz) = (x + dx, z + dz);
+                    if bx >= 16 || bz >= 16 {
+                        continue;
+                    }
+                    let shell = dx == 0 || dx == 4 || dz == 0 || dz == 4 || dy == 0 || dy == 3;
+                    if shell {
+                        let b = if dy == 0 && (dx + dz) % 2 == 0 { mossy } else { cobble };
+                        chunk.set_block(bx, y + dy, bz, b);
+                    } else {
+                        chunk.set_block(bx, y + dy, bz, block::AIR);
+                    }
+                }
+            }
+        }
+        // A spawner in the centre and a chest in a corner.
+        if x + 2 < 16 && z + 2 < 16 {
+            chunk.set_block(x + 2, y + 1, z + 2, spawner);
+        }
+        if x + 1 < 16 && z + 1 < 16 {
+            chunk.set_block(x + 1, y + 1, z + 1, chest);
+        }
+    }
+}
+
 impl Generator for TerrainGenerator {
     fn generate(&self, cx: i32, cz: i32) -> Chunk {
         let mut chunk = Chunk::new(cx, cz);
@@ -166,6 +248,7 @@ impl Generator for TerrainGenerator {
                 }
             }
         }
+        self.place_structures(&mut chunk, cx, cz);
         chunk
     }
 
@@ -204,6 +287,69 @@ fn grow_tree(chunk: &mut Chunk, x: usize, base_y: i32, z: usize) {
 fn value_noise_3d(seed: u64, x: f64, y: f64, z: f64) -> f64 {
     let n = value_noise(seed, x, z) * 0.5 + value_noise(seed ^ 0xABCD, x + y * 0.7, z - y * 0.7) * 0.5;
     (n + 1.0) * 0.5
+}
+
+/// A simple Nether: bedrock shell, netherrack, a shallow lava sea.
+pub struct NetherGenerator;
+
+impl Generator for NetherGenerator {
+    fn generate(&self, cx: i32, cz: i32) -> Chunk {
+        let mut chunk = Chunk::new(cx, cz);
+        let netherrack = block::state_by_name("netherrack").unwrap_or(block::STONE);
+        let lava = block::state_by_name("lava").unwrap_or(block::WATER);
+        for x in 0..SECTION_DIM {
+            for z in 0..SECTION_DIM {
+                chunk.set_block(x, MIN_Y, z, block::BEDROCK);
+                for y in (MIN_Y + 1)..40 {
+                    chunk.set_block(x, y, z, netherrack);
+                }
+                for y in (MIN_Y + 1)..6 {
+                    chunk.set_block(x, y, z, lava);
+                }
+                chunk.set_block(x, 60, z, block::BEDROCK); // ceiling
+            }
+        }
+        chunk
+    }
+
+    fn spawn_height(&self, _x: i32, _z: i32) -> i32 {
+        42
+    }
+
+    fn name(&self) -> &'static str {
+        "nether"
+    }
+}
+
+/// A simple End: a central end-stone island floating in the void.
+pub struct EndGenerator;
+
+impl Generator for EndGenerator {
+    fn generate(&self, cx: i32, cz: i32) -> Chunk {
+        let mut chunk = Chunk::new(cx, cz);
+        let end_stone = block::state_by_name("end_stone").unwrap_or(block::STONE);
+        for x in 0..SECTION_DIM {
+            for z in 0..SECTION_DIM {
+                let wx = cx * 16 + x as i32;
+                let wz = cz * 16 + z as i32;
+                // ~40-block radius island around the origin.
+                if (wx * wx + wz * wz) < 40 * 40 {
+                    for y in 46..50 {
+                        chunk.set_block(x, y, z, end_stone);
+                    }
+                }
+            }
+        }
+        chunk
+    }
+
+    fn spawn_height(&self, _x: i32, _z: i32) -> i32 {
+        50
+    }
+
+    fn name(&self) -> &'static str {
+        "end"
+    }
 }
 
 /// Deterministic 2D value noise in roughly `[-1, 1]`, smoothly interpolated.

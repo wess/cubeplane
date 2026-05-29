@@ -300,7 +300,7 @@ where
         ("help", false), ("list", false), ("pos", false), ("tp", true),
         ("gamemode", true), ("give", true), ("time", true), ("weather", true),
         ("summon", true), ("effect", true), ("heal", false), ("kill", false),
-        ("clear", false), ("xp", true), ("vehicle", true), ("craft", true),
+        ("clear", false), ("xp", true), ("vehicle", true), ("craft", true), ("dimension", true),
     ]));
     player.send(cb::tab_list_header(
         &text::colored("cubeplane", "gold"),
@@ -476,7 +476,18 @@ async fn play_loop<R: AsyncRead + Unpin>(
                 handle_chat(shared, player, &message);
             }
             Play::ChatCommand { command } => {
-                handle_command(shared, player, &command);
+                // /dimension needs the streaming state, so it's handled here.
+                let mut parts = command.split_whitespace();
+                if parts.next() == Some("dimension") {
+                    let dim = match parts.next() {
+                        Some("nether") => 1u8,
+                        Some("end") => 2,
+                        _ => 0,
+                    };
+                    switch_dimension(shared, player, dim, loaded, last_center);
+                } else {
+                    handle_command(shared, player, &command);
+                }
             }
             Play::BlockDig { status, x, y, z, sequence } => {
                 let creative = player.gamemode() == 1;
@@ -487,7 +498,7 @@ async fn play_loop<R: AsyncRead + Unpin>(
             }
             Play::BlockPlace { x, y, z, face, sequence } => {
                 // Interacting with a lever/chest/sign takes priority over placing.
-                if !try_toggle_lever(shared, x, y, z)
+                if !try_toggle_lever(shared, player, x, y, z)
                     && !try_use_bed(shared, player, x, y, z)
                     && !try_open_container(shared, player, x, y, z)
                     && !try_open_furnace(shared, player, x, y, z)
@@ -647,6 +658,7 @@ fn stream_chunks(
         }
     }
 
+    let dim = player.state().dimension;
     // Send newly-needed chunks (closest first for nicer pop-in).
     let mut to_send: Vec<(i32, i32)> = wanted.difference(loaded).copied().collect();
     to_send.sort_by_key(|(x, z)| (x - cx).pow(2) + (z - cz).pow(2));
@@ -654,7 +666,7 @@ fn stream_chunks(
         // Clone the column under a brief lock, then do the expensive palette +
         // lighting encode *outside* the global world lock to cut contention.
         let chunk = {
-            let mut world = shared.world.lock().unwrap();
+            let mut world = shared.dim_world(dim).lock().unwrap();
             world.chunk(x, z).clone()
         };
         let light = match chunk.cached_light() {
@@ -662,7 +674,7 @@ fn stream_chunks(
             None => {
                 let l = chunk.compute_light();
                 // Cache it back so re-sends to other players don't recompute.
-                shared.world.lock().unwrap().store_light(x, z, l.clone());
+                shared.dim_world(dim).lock().unwrap().store_light(x, z, l.clone());
                 l
             }
         };
@@ -714,6 +726,43 @@ fn check_environment(shared: &Arc<Shared>, player: &Player) {
     }
 }
 
+/// Move the player to another dimension, rebuilding their world view.
+fn switch_dimension(
+    shared: &Arc<Shared>,
+    player: &Player,
+    dim: u8,
+    loaded: &mut HashSet<(i32, i32)>,
+    last_center: &mut (i32, i32),
+) {
+    if !commands::is_op(shared, &player.name) {
+        player.send(cb::system_chat(&text::colored("You don't have permission for that.", "red"), false));
+        return;
+    }
+    let spawn = shared.dim_world(dim).lock().unwrap().spawn();
+    player.update(|s| {
+        s.dimension = dim;
+        s.x = spawn.0;
+        s.y = spawn.1;
+        s.z = spawn.2;
+        s.fall_peak_y = spawn.1;
+    });
+    let gamemode = player.gamemode() as u8;
+    player.send(cb::respawn(dim, gamemode, false));
+    player.send(cb::player_abilities(if gamemode == 1 { 0x0D } else { 0x00 }, 0.05, 0.1));
+    player.sync_inventory();
+    player.send(cb::sync_position(spawn.0, spawn.1, spawn.2, 0.0, 0.0, 0, 0));
+    let (cx, cz) = ((spawn.0.floor() as i32).div_euclid(16), (spawn.2.floor() as i32).div_euclid(16));
+    player.send(cb::set_center_chunk(cx, cz));
+    loaded.clear();
+    stream_chunks(shared, player, cx, cz, loaded);
+    *last_center = (cx, cz);
+    player.send(cb::game_event(13, 0.0));
+    player.send(cb::system_chat(
+        &text::colored(format!("Teleported to the {}.", ["overworld", "nether", "end"][dim as usize]), "green"),
+        false,
+    ));
+}
+
 /// Revive the player and rebuild their world view after death.
 fn respawn_player(
     shared: &Arc<Shared>,
@@ -722,10 +771,11 @@ fn respawn_player(
     last_center: &mut (i32, i32),
 ) {
     combat::revive(player);
-    // Respawn at the player's bed if they have one, else world spawn.
+    // Players always respawn in the overworld, at their bed if they have one.
     let spawn = player.state().spawn_point.unwrap_or_else(|| shared.world.lock().unwrap().spawn());
     let is_flat = shared.world.lock().unwrap().generator_name() == "flat";
     player.update(|s| {
+        s.dimension = 0;
         s.x = spawn.0;
         s.y = spawn.1;
         s.z = spawn.2;
@@ -733,7 +783,7 @@ fn respawn_player(
     });
 
     let gamemode = player.gamemode() as u8;
-    player.send(cb::respawn(gamemode, is_flat));
+    player.send(cb::respawn(0, gamemode, is_flat));
     player.sync_inventory();
     let abilities = if player.gamemode() == 1 { 0x0D } else { 0x00 };
     player.send(cb::player_abilities(abilities, 0.05, 0.1));
@@ -962,26 +1012,29 @@ fn do_trade(player: &Player, index: i32) {
 
 /// Toggle a lever the player clicked, updating redstone. Returns true if a
 /// lever was toggled.
-fn try_toggle_lever(shared: &Arc<Shared>, x: i32, y: i32, z: i32) -> bool {
-    let state = { shared.world.lock().unwrap().get_block(x, y, z) };
+fn try_toggle_lever(shared: &Arc<Shared>, player: &Player, x: i32, y: i32, z: i32) -> bool {
+    let dim = player.state().dimension;
+    let state = { shared.dim_world(dim).lock().unwrap().get_block(x, y, z) };
     if cubeplane_world::block::name_of(state) != "lever" {
         return false;
     }
     let powered = cubeplane_world::block::prop_index(state, "powered").unwrap_or(1);
     let toggled = cubeplane_world::block::with_prop(state, "powered", if powered == 0 { 1 } else { 0 });
     {
-        let mut w = shared.world.lock().unwrap();
+        let mut w = shared.dim_world(dim).lock().unwrap();
         w.set_block(x, y, z, toggled);
     }
     shared.broadcast(cb::block_update(x, y, z, toggled));
-    crate::sim::redstone_update(shared, x, y, z);
+    if dim == 0 {
+        crate::sim::redstone_update(shared, x, y, z);
+    }
     true
 }
 
 /// Sleep in / set spawn at a bed. Returns true if a bed was clicked.
 fn try_use_bed(shared: &Arc<Shared>, player: &Player, x: i32, y: i32, z: i32) -> bool {
     let is_bed = {
-        let mut w = shared.world.lock().unwrap();
+        let mut w = shared.dim_world(player.state().dimension).lock().unwrap();
         cubeplane_world::block::info(w.get_block(x, y, z)).name.ends_with("_bed")
     };
     if !is_bed {
@@ -1005,7 +1058,7 @@ fn try_use_bed(shared: &Arc<Shared>, player: &Player, x: i32, y: i32, z: i32) ->
 /// Open the furnace screen if the player clicked a furnace. Returns true if so.
 fn try_open_furnace(shared: &Arc<Shared>, player: &Player, x: i32, y: i32, z: i32) -> bool {
     let is_furnace = {
-        let mut w = shared.world.lock().unwrap();
+        let mut w = shared.dim_world(player.state().dimension).lock().unwrap();
         cubeplane_world::block::info(w.get_block(x, y, z)).name == "furnace"
     };
     if !is_furnace {
@@ -1019,7 +1072,7 @@ fn try_open_furnace(shared: &Arc<Shared>, player: &Player, x: i32, y: i32, z: i3
 /// sign was clicked.
 fn try_read_sign(shared: &Arc<Shared>, player: &Player, x: i32, y: i32, z: i32) -> bool {
     let is_sign = {
-        let mut w = shared.world.lock().unwrap();
+        let mut w = shared.dim_world(player.state().dimension).lock().unwrap();
         cubeplane_world::block::info(w.get_block(x, y, z)).name.ends_with("_sign")
     };
     if !is_sign {
@@ -1039,7 +1092,7 @@ fn try_read_sign(shared: &Arc<Shared>, player: &Player, x: i32, y: i32, z: i32) 
 /// Open a chest the player clicked. Returns true if a container was opened.
 fn try_open_container(shared: &Arc<Shared>, player: &Player, x: i32, y: i32, z: i32) -> bool {
     let is_chest = {
-        let mut w = shared.world.lock().unwrap();
+        let mut w = shared.dim_world(player.state().dimension).lock().unwrap();
         cubeplane_world::block::info(w.get_block(x, y, z)).name == "chest"
     };
     if !is_chest {
@@ -1143,8 +1196,9 @@ fn update_crafting_grid(player: &Player, took_output: bool) {
 }
 
 fn break_block(shared: &Arc<Shared>, player: &Player, x: i32, y: i32, z: i32, creative: bool) {
+    let dim = player.state().dimension;
     let previous = {
-        let mut world = shared.world.lock().unwrap();
+        let mut world = shared.dim_world(dim).lock().unwrap();
         let prev = world.get_block(x, y, z);
         world.set_block(x, y, z, cubeplane_world::block::AIR);
         prev
@@ -1182,12 +1236,13 @@ fn break_block(shared: &Arc<Shared>, player: &Player, x: i32, y: i32, z: i32, cr
             }
         }
     }
-    // Fluids can now flow into the gap; refresh redstone if it was a component.
-    shared.schedule_fluid(x, y, z);
-    // Whatever sat on top of the broken block may now fall.
-    crate::sim::gravity_check(shared, x, y + 1, z);
-    if crate::sim::is_redstone(cubeplane_world::block::name_of(previous)) {
-        crate::sim::redstone_update(shared, x, y, z);
+    // Overworld simulations: fluids flow in, blocks above may fall, redstone.
+    if dim == 0 {
+        shared.schedule_fluid(x, y, z);
+        crate::sim::gravity_check(shared, x, y + 1, z);
+        if crate::sim::is_redstone(cubeplane_world::block::name_of(previous)) {
+            crate::sim::redstone_update(shared, x, y, z);
+        }
     }
     shared.fire_mod(ModEvent::BlockBreak {
         player: player.name.clone(),
@@ -1217,8 +1272,9 @@ fn place_block(shared: &Arc<Shared>, player: &Player, x: i32, y: i32, z: i32, fa
         _ => (0, 1, 0),
     };
     let (px, py, pz) = (x + dx, y + dy, z + dz);
+    let dim = player.state().dimension;
     {
-        let mut world = shared.world.lock().unwrap();
+        let mut world = shared.dim_world(dim).lock().unwrap();
         world.set_block(px, py, pz, state);
     }
     shared.broadcast(cb::block_update(px, py, pz, state));
@@ -1235,11 +1291,13 @@ fn place_block(shared: &Arc<Shared>, player: &Player, x: i32, y: i32, z: i32, fa
     if cubeplane_world::block::info(state).name == "furnace" {
         shared.ensure_furnace((px, py, pz));
     }
-    // Let fluids flow toward / from the change, and update redstone.
-    shared.schedule_fluid(px, py, pz);
-    crate::sim::gravity_check(shared, px, py, pz);
-    if crate::sim::is_redstone(cubeplane_world::block::name_of(state)) {
-        crate::sim::redstone_update(shared, px, py, pz);
+    // Overworld simulations only.
+    if dim == 0 {
+        shared.schedule_fluid(px, py, pz);
+        crate::sim::gravity_check(shared, px, py, pz);
+        if crate::sim::is_redstone(cubeplane_world::block::name_of(state)) {
+            crate::sim::redstone_update(shared, px, py, pz);
+        }
     }
 
     // Survival consumes the placed item.
