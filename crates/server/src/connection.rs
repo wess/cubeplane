@@ -510,6 +510,7 @@ async fn play_loop<R: AsyncRead + Unpin>(
                     && !try_open_furnace(shared, player, x, y, z)
                     && !try_open_brewing(shared, player, x, y, z)
                     && !try_open_crafting(shared, player, x, y, z)
+                    && !try_open_anvil(shared, player, x, y, z)
                     && !try_read_sign(shared, player, x, y, z)
                 {
                     place_block(shared, player, x, y, z, face);
@@ -541,11 +542,16 @@ async fn play_loop<R: AsyncRead + Unpin>(
                 if player.state().open_crafting {
                     close_crafting(player);
                 }
+                if player.state().open_anvil {
+                    close_anvil(player);
+                }
                 player.update(|s| {
                     s.open_container = None;
                     s.open_merchant = false;
                     s.open_furnace = None;
                     s.open_brewing = None;
+                    s.open_crafting = false;
+                    s.open_anvil = false;
                 });
             }
             Play::UseEntity { target, interaction } => {
@@ -1280,6 +1286,113 @@ fn close_crafting(player: &Player) {
     player.sync_inventory();
 }
 
+/// Open an anvil window if the player clicked an anvil.
+fn try_open_anvil(shared: &Arc<Shared>, player: &Player, x: i32, y: i32, z: i32) -> bool {
+    let is_anvil = {
+        let mut w = shared.dim_world(player.state().dimension).lock().unwrap();
+        cubeplane_world::block::info(w.get_block(x, y, z)).name.ends_with("anvil")
+    };
+    if !is_anvil {
+        return false;
+    }
+    player.update(|s| {
+        s.open_anvil = true;
+        s.anvil_in = [item::ItemStack::EMPTY; 2];
+    });
+    let inv = player.inventory(|i| i.slots().to_vec());
+    let mut items = vec![item::ItemStack::EMPTY; 3]; // in0, in1, out
+    items.extend_from_slice(&inv[9..45]);
+    player.send(cb::open_window(6, 7, &text::plain("Repair"))); // 7 = anvil menu
+    player.send(cb::window_items(6, 0, &items, item::ItemStack::EMPTY));
+    true
+}
+
+/// Compute an anvil's output from its two inputs: repair like items, or apply
+/// the second item's enchantment to the first.
+fn anvil_result(a: item::ItemStack, b: item::ItemStack) -> item::ItemStack {
+    if a.is_empty() {
+        return item::ItemStack::EMPTY;
+    }
+    if b.is_empty() {
+        return item::ItemStack::EMPTY;
+    }
+    // Repair two of the same damageable item.
+    if a.id == b.id {
+        if let Some(max) = item::max_durability(a.id) {
+            let restored = (max - b.damage) + max / 8; // remaining + 12.5% bonus
+            let mut out = a;
+            out.count = 1;
+            out.damage = a.damage.saturating_sub(restored);
+            // Keep the better enchant of the two.
+            if b.ench != 0 && (a.ench == 0 || b.ench_lvl > a.ench_lvl) {
+                out.ench = b.ench;
+                out.ench_lvl = b.ench_lvl;
+            }
+            return out;
+        }
+    }
+    // Apply an enchantment from the second item (e.g. an enchanted book).
+    if b.ench != 0 {
+        let mut out = a;
+        out.count = 1;
+        if out.ench == 0 || out.ench == b.ench {
+            out.ench = b.ench;
+            out.ench_lvl = (out.ench_lvl.max(b.ench_lvl) + if out.ench == b.ench { 1 } else { 0 }).min(5);
+        }
+        return out;
+    }
+    item::ItemStack::EMPTY
+}
+
+/// Handle a click in the open anvil window.
+fn anvil_window_click(player: &Player, changed: &[(i16, item::ItemStack)]) {
+    let took_output = changed.iter().any(|(s, _)| *s == 2);
+    player.update(|st| {
+        for (slot, stack) in changed {
+            match *slot {
+                0 => st.anvil_in[0] = *stack,
+                1 => st.anvil_in[1] = *stack,
+                _ => {}
+            }
+        }
+    });
+    player.inventory(|i| {
+        for (slot, stack) in changed {
+            if *slot >= 3 {
+                i.set(*slot as usize - 3 + 9, *stack);
+            }
+        }
+    });
+
+    if took_output {
+        // Consume both inputs on a successful craft.
+        let [a, b] = player.state().anvil_in;
+        if !anvil_result(a, b).is_empty() {
+            player.update(|st| st.anvil_in = [item::ItemStack::EMPTY; 2]);
+            player.send(cb::set_slot(6, 0, 0, item::ItemStack::EMPTY));
+            player.send(cb::set_slot(6, 0, 1, item::ItemStack::EMPTY));
+        }
+    }
+    let [a, b] = player.state().anvil_in;
+    player.send(cb::set_slot(6, 0, 2, anvil_result(a, b)));
+}
+
+fn close_anvil(player: &Player) {
+    let inputs = player.state().anvil_in;
+    player.inventory(|i| {
+        for s in inputs {
+            if !s.is_empty() {
+                i.add(s.id, s.count);
+            }
+        }
+    });
+    player.update(|s| {
+        s.open_anvil = false;
+        s.anvil_in = [item::ItemStack::EMPTY; 2];
+    });
+    player.sync_inventory();
+}
+
 /// Open the brewing screen if the player clicked a brewing stand.
 fn try_open_brewing(shared: &Arc<Shared>, player: &Player, x: i32, y: i32, z: i32) -> bool {
     let is_stand = {
@@ -1357,6 +1470,10 @@ fn apply_window_click(shared: &Arc<Shared>, player: &Player, window_id: u8, chan
         }
         if player.state().open_crafting {
             craft_window_click(player, changed);
+            return;
+        }
+        if player.state().open_anvil {
+            anvil_window_click(player, changed);
             return;
         }
     }

@@ -47,6 +47,10 @@ pub struct PlayerState {
     pub open_crafting: bool,
     /// The 3×3 crafting-table grid contents while open.
     pub craft_grid: [crate::item::ItemStack; 9],
+    /// True while an anvil window is open.
+    pub open_anvil: bool,
+    /// The two anvil input slots while open.
+    pub anvil_in: [crate::item::ItemStack; 2],
     /// Entity id of the vehicle the player is riding, if any.
     pub riding: Option<i32>,
     /// Entity id of the AI villager the player is currently conversing with.
@@ -84,6 +88,8 @@ impl PlayerState {
             open_brewing: None,
             open_crafting: false,
             craft_grid: [crate::item::ItemStack::EMPTY; 9],
+            open_anvil: false,
+            anvil_in: [crate::item::ItemStack::EMPTY; 2],
             riding: None,
             talking_to: None,
             spawn_point: None,
