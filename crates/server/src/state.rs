@@ -12,7 +12,7 @@ use cubeplane_mods::ModRuntime;
 use cubeplane_world::World;
 
 use crate::config::Config;
-use crate::entity::{ItemEntity, Mob, Projectile};
+use crate::entity::{ItemEntity, Mob, Projectile, Vehicle};
 use crate::item::ItemStack;
 use crate::player::Player;
 
@@ -27,6 +27,7 @@ pub struct Shared {
     pub(crate) mobs: RwLock<HashMap<i32, Mob>>,
     pub(crate) items: RwLock<HashMap<i32, ItemEntity>>,
     pub(crate) projectiles: RwLock<HashMap<i32, Projectile>>,
+    pub(crate) vehicles: RwLock<HashMap<i32, Vehicle>>,
     /// Block-entity contents for chests, keyed by block position.
     containers: RwLock<HashMap<(i32, i32, i32), Vec<ItemStack>>>,
     /// Cells queued for fluid-flow evaluation.
@@ -55,6 +56,7 @@ impl Shared {
             mobs: RwLock::new(HashMap::new()),
             items: RwLock::new(HashMap::new()),
             projectiles: RwLock::new(HashMap::new()),
+            vehicles: RwLock::new(HashMap::new()),
             containers: RwLock::new(HashMap::new()),
             fluid_queue: Mutex::new(std::collections::VecDeque::new()),
             next_entity_id: AtomicI32::new(1),
@@ -125,6 +127,26 @@ impl Shared {
     /// Register a projectile.
     pub fn add_projectile(&self, proj: Projectile) {
         self.projectiles.write().unwrap().insert(proj.entity_id, proj);
+    }
+
+    /// Register a vehicle.
+    pub fn add_vehicle(&self, v: Vehicle) {
+        self.vehicles.write().unwrap().insert(v.entity_id, v);
+    }
+
+    /// Snapshot all vehicles.
+    pub fn vehicles(&self) -> Vec<Vehicle> {
+        self.vehicles.read().unwrap().values().cloned().collect()
+    }
+
+    /// Mutate a vehicle in place.
+    pub fn with_vehicle<R>(&self, entity_id: i32, f: impl FnOnce(&mut Vehicle) -> R) -> Option<R> {
+        self.vehicles.write().unwrap().get_mut(&entity_id).map(f)
+    }
+
+    /// Whether an entity id is a vehicle.
+    pub fn is_vehicle(&self, entity_id: i32) -> bool {
+        self.vehicles.read().unwrap().contains_key(&entity_id)
     }
 
     /// Queue a cell (and its 6 neighbours) for fluid-flow evaluation.

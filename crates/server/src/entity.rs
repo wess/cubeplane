@@ -105,6 +105,20 @@ pub struct Projectile {
     pub owner: i32,
 }
 
+/// A rideable vehicle (boat or minecart).
+#[derive(Debug, Clone)]
+pub struct Vehicle {
+    pub entity_id: i32,
+    pub type_id: i32,
+    pub uuid: Uuid,
+    pub x: f64,
+    pub y: f64,
+    pub z: f64,
+    pub yaw: f32,
+    /// Entity id of the player currently riding, if any.
+    pub rider: Option<i32>,
+}
+
 /// A live mob in the world.
 #[derive(Debug, Clone)]
 pub struct Mob {

@@ -57,6 +57,10 @@ pub enum Play {
     WindowClick { window_id: u8, changed: Vec<(i16, ItemStack)> },
     /// The player closed an inventory window.
     CloseWindow,
+    /// The player (riding a vehicle) moved it.
+    VehicleMove { x: f64, y: f64, z: f64, yaw: f32, pitch: f32 },
+    /// Steering input; `jump` is used to dismount.
+    SteerVehicle { jump: bool },
     /// A serverbound packet we recognise the id of but do not act on.
     Ignored,
 }
@@ -103,6 +107,19 @@ pub fn parse_play(mut raw: RawPacket) -> Result<Play> {
             Play::CreativeSlot { slot, stack }
         }
         play_sb::CLOSE_WINDOW => Play::CloseWindow,
+        play_sb::VEHICLE_MOVE => Play::VehicleMove {
+            x: b.read_f64()?,
+            y: b.read_f64()?,
+            z: b.read_f64()?,
+            yaw: b.read_f32()?,
+            pitch: b.read_f32()?,
+        },
+        play_sb::STEER_VEHICLE => {
+            let _sideways = b.read_f32()?;
+            let _forward = b.read_f32()?;
+            let jump = b.read_u8()? & 0x01 != 0;
+            Play::SteerVehicle { jump }
+        }
         play_sb::WINDOW_CLICK => {
             let window_id = b.read_u8()?;
             let _state = b.read_varint()?;

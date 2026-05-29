@@ -43,6 +43,8 @@ pub mod play_cb {
     pub const SPAWN_ENTITY: i32 = 0x01;
     pub const SPAWN_XP_ORB: i32 = 0x02;
     pub const SPAWN_PLAYER: i32 = 0x03;
+    pub const TRADE_LIST: i32 = 0x2a;
+    pub const SET_PASSENGERS: i32 = 0x59;
     pub const DECLARE_COMMANDS: i32 = 0x10;
     pub const CLOSE_WINDOW: i32 = 0x11;
     pub const WINDOW_ITEMS: i32 = 0x12;
@@ -107,6 +109,9 @@ pub mod play_sb {
     pub const FLYING: i32 = 0x17;
     pub const HELD_ITEM_SLOT: i32 = 0x28;
     pub const USE_ENTITY: i32 = 0x10;
+    pub const VEHICLE_MOVE: i32 = 0x18;
+    pub const STEER_VEHICLE: i32 = 0x1f;
+    pub const SELECT_TRADE: i32 = 0x26;
     pub const WINDOW_CLICK: i32 = 0x0b;
     pub const CLOSE_WINDOW: i32 = 0x0c;
     pub const SET_CREATIVE_SLOT: i32 = 0x2b;

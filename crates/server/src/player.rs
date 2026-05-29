@@ -37,6 +37,10 @@ pub struct PlayerState {
     pub gamemode: i32,
     /// Block position of the chest the player currently has open, if any.
     pub open_container: Option<(i32, i32, i32)>,
+    /// True while a (non-inventory) merchant window is open.
+    pub open_merchant: bool,
+    /// Entity id of the vehicle the player is riding, if any.
+    pub riding: Option<i32>,
 }
 
 /// Maximum player health, in half-hearts.
@@ -61,6 +65,8 @@ impl PlayerState {
             hurt_cooldown: 0,
             gamemode: 0,
             open_container: None,
+            open_merchant: false,
+            riding: None,
         }
     }
 

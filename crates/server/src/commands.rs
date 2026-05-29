@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use crate::clientbound as cb;
 use crate::combat;
-use crate::entity::MobKind;
+use crate::entity::{MobKind, Vehicle};
 use crate::inventory::Inventory;
 use crate::item;
 use crate::mobs;
@@ -143,6 +143,30 @@ pub fn dispatch(shared: &Arc<Shared>, player: &Player, name: &str, args: &[Strin
             }
             combat::revive(player);
             tell(player, "Healed.", "green");
+        }
+        "vehicle" => {
+            if !require_op(player, op) {
+                return true;
+            }
+            let (type_id, label) = match args.first().map(String::as_str) {
+                Some("minecart") => (64, "minecart"),
+                _ => (9, "boat"),
+            };
+            let s = player.state();
+            let entity_id = shared.next_entity_id();
+            let uuid = uuid::Uuid::new_v4();
+            shared.add_vehicle(Vehicle {
+                entity_id,
+                type_id,
+                uuid,
+                x: s.x,
+                y: s.y,
+                z: s.z,
+                yaw: s.yaw,
+                rider: None,
+            });
+            shared.broadcast(cb::spawn_entity(entity_id, uuid, type_id, s.x, s.y, s.z, s.yaw, 0.0, s.yaw, 0, (0, 0, 0)));
+            tell(player, format!("Spawned a {label} — right-click to ride, jump to exit."), "green");
         }
         "kill" => {
             combat::damage_player(shared, player, 1000.0, "died");

@@ -282,7 +282,7 @@ where
     player.sync_inventory();
     player.send(cb::declare_commands(&[
         "help", "list", "pos", "tp", "gamemode", "give", "time", "weather", "summon", "effect",
-        "heal", "kill", "clear", "xp",
+        "heal", "kill", "clear", "xp", "vehicle",
     ]));
     player.send(cb::tab_list_header(
         &text::colored("cubeplane", "gold"),
@@ -328,6 +328,13 @@ where
         player.send(cb::spawn_entity(
             m.entity_id, m.uuid, m.kind.type_id(), m.x, m.y, m.z, m.yaw, m.pitch, m.yaw, 0, (0, 0, 0),
         ));
+    }
+    // …and every vehicle (with its rider, if any).
+    for v in shared.vehicles() {
+        player.send(cb::spawn_entity(v.entity_id, v.uuid, v.type_id, v.x, v.y, v.z, v.yaw, 0.0, v.yaw, 0, (0, 0, 0)));
+        if let Some(r) = v.rider {
+            player.send(cb::set_passengers(v.entity_id, &[r]));
+        }
     }
 
     // Announce + notify mods.
@@ -452,10 +459,14 @@ async fn play_loop<R: AsyncRead + Unpin>(
                 apply_window_click(shared, player, window_id, &changed);
             }
             Play::CloseWindow => {
-                player.update(|s| s.open_container = None);
+                player.update(|s| {
+                    s.open_container = None;
+                    s.open_merchant = false;
+                });
             }
             Play::UseEntity { target, interaction } => {
-                if interaction == 1 && !player.is_dead() {
+                if player.is_dead() {
+                } else if interaction == 1 {
                     let damage = match player.inventory(|inv| inv.held(player.state().held_slot)).def() {
                         Some(d) => match d.kind {
                             item::ItemKind::Weapon(dmg) => dmg,
@@ -464,6 +475,29 @@ async fn play_loop<R: AsyncRead + Unpin>(
                         None => 1.0,
                     };
                     mobs::player_attack(shared, player, target, damage);
+                } else {
+                    // Right-click interact: ride a vehicle or trade with a villager.
+                    interact_entity(shared, player, target);
+                }
+            }
+            Play::VehicleMove { x, y, z, yaw, pitch } => {
+                if let Some(vid) = player.state().riding {
+                    shared.with_vehicle(vid, |v| {
+                        v.x = x;
+                        v.y = y;
+                        v.z = z;
+                        v.yaw = yaw;
+                    });
+                    shared.broadcast_except(player.entity_id, cb::entity_teleport(vid, x, y, z, yaw, pitch, true));
+                }
+            }
+            Play::SteerVehicle { jump } => {
+                if jump {
+                    if let Some(vid) = player.state().riding {
+                        player.update(|s| s.riding = None);
+                        shared.with_vehicle(vid, |v| v.rider = None);
+                        shared.broadcast(cb::set_passengers(vid, &[]));
+                    }
                 }
             }
             Play::ClientCommand { action } => {
@@ -641,7 +675,52 @@ fn respawn_player(
             m.entity_id, m.uuid, m.kind.type_id(), m.x, m.y, m.z, m.yaw, m.pitch, m.yaw, 0, (0, 0, 0),
         ));
     }
+    for v in shared.vehicles() {
+        player.send(cb::spawn_entity(v.entity_id, v.uuid, v.type_id, v.x, v.y, v.z, v.yaw, 0.0, v.yaw, 0, (0, 0, 0)));
+    }
     broadcast_move(shared, player);
+}
+
+/// Right-click interaction with an entity: ride a vehicle, or trade with a
+/// villager.
+fn interact_entity(shared: &Arc<Shared>, player: &Player, target: i32) {
+    // Mount a vehicle.
+    if shared.is_vehicle(target) {
+        shared.with_vehicle(target, |v| v.rider = Some(player.entity_id));
+        player.update(|s| s.riding = Some(target));
+        shared.broadcast(cb::set_passengers(target, &[player.entity_id]));
+        return;
+    }
+    // Trade with a villager.
+    let is_villager = shared
+        .with_mob(target, |m| m.kind.name() == "villager")
+        .unwrap_or(false);
+    if is_villager {
+        open_merchant(shared, player);
+    }
+}
+
+/// Open a villager trade window with a couple of sample offers.
+fn open_merchant(shared: &Arc<Shared>, player: &Player) {
+    let _ = shared;
+    let emerald = item::id_any("emerald").unwrap_or(0);
+    let bread = item::id_any("bread").unwrap_or(0);
+    let stick = item::id_any("stick").unwrap_or(0);
+    let offers = vec![
+        (
+            item::ItemStack::new(emerald, 1),
+            item::ItemStack::new(bread, 6),
+            item::ItemStack::EMPTY,
+        ),
+        (
+            item::ItemStack::new(stick, 32),
+            item::ItemStack::new(emerald, 1),
+            item::ItemStack::EMPTY,
+        ),
+    ];
+    player.update(|s| s.open_merchant = true);
+    player.send(cb::open_window(2, 18, &text::plain("Villager"))); // 18 = merchant menu
+    player.send(cb::trade_list(2, &offers));
 }
 
 /// Toggle a lever the player clicked, updating redstone. Returns true if a
@@ -688,6 +767,11 @@ fn try_open_container(shared: &Arc<Shared>, player: &Player, x: i32, y: i32, z: 
 /// Apply a window click, routing chest-window slots to the open container.
 fn apply_window_click(shared: &Arc<Shared>, player: &Player, window_id: u8, changed: &[(i16, item::ItemStack)]) {
     use crate::state::CONTAINER_SIZE;
+    // The merchant economy isn't simulated; ignore clicks so they can't desync
+    // the player inventory.
+    if player.state().open_merchant {
+        return;
+    }
     if window_id != 0 {
         if let Some(pos) = player.state().open_container {
             for (slot, stack) in changed {

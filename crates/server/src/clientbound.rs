@@ -429,6 +429,41 @@ pub fn play_disconnect(reason: &Json) -> BytesMut {
 // Inventory, items & entities
 // ---------------------------------------------------------------------------
 
+/// Set the passengers riding an entity (e.g. a player in a boat).
+pub fn set_passengers(vehicle: i32, passengers: &[i32]) -> BytesMut {
+    let mut b = pkt(play_cb::SET_PASSENGERS);
+    b.write_varint(vehicle);
+    b.write_varint(passengers.len() as i32);
+    for p in passengers {
+        b.write_varint(*p);
+    }
+    b
+}
+
+/// A villager's trade list. Each offer is `(input1, output, input2)`.
+pub fn trade_list(window_id: i32, offers: &[(ItemStack, ItemStack, ItemStack)]) -> BytesMut {
+    let mut b = pkt(play_cb::TRADE_LIST);
+    b.write_varint(window_id);
+    b.write_varint(offers.len() as i32);
+    for (in1, out, in2) in offers {
+        write_slot(&mut b, *in1);
+        write_slot(&mut b, *out);
+        write_slot(&mut b, *in2);
+        b.write_bool(false); // trade disabled
+        b.write_i32(0); // uses
+        b.write_i32(999); // max uses
+        b.write_i32(2); // xp
+        b.write_i32(0); // special price
+        b.write_f32(0.0); // price multiplier
+        b.write_i32(0); // demand
+    }
+    b.write_varint(1); // villager level
+    b.write_varint(0); // experience
+    b.write_bool(true); // regular villager
+    b.write_bool(false); // can restock
+    b
+}
+
 /// Open a container window. `inv_type` 2 = generic 9×3 (single chest).
 pub fn open_window(window_id: i32, inv_type: i32, title: &Json) -> BytesMut {
     let mut b = pkt(play_cb::OPEN_WINDOW);
