@@ -45,6 +45,8 @@ pub struct PlayerState {
     pub riding: Option<i32>,
     /// Entity id of the AI villager the player is currently conversing with.
     pub talking_to: Option<i32>,
+    /// Bed spawn point, if the player has slept in a bed.
+    pub spawn_point: Option<(f64, f64, f64)>,
 }
 
 /// Maximum player health, in half-hearts.
@@ -73,6 +75,7 @@ impl PlayerState {
             open_furnace: None,
             riding: None,
             talking_to: None,
+            spawn_point: None,
         }
     }
 

@@ -403,6 +403,20 @@ pub fn set_held_item(slot: u8) -> BytesMut {
     b
 }
 
+/// Initialize the world border (centred at origin) with the given diameter.
+pub fn init_world_border(diameter: f64) -> BytesMut {
+    let mut b = pkt(play_cb::INITIALIZE_WORLD_BORDER);
+    b.write_f64(0.0); // center x
+    b.write_f64(0.0); // center z
+    b.write_f64(diameter); // old diameter
+    b.write_f64(diameter); // new diameter
+    b.write_varint(0); // speed (ms to reach new size; 0 = static)
+    b.write_varint(29_999_984); // portal teleport boundary
+    b.write_varint(5); // warning blocks
+    b.write_varint(15); // warning time
+    b
+}
+
 /// Game Event. `reason` 13 = "start waiting for chunks" / level chunks loaded.
 pub fn game_event(reason: u8, value: f32) -> BytesMut {
     let mut b = pkt(play_cb::GAME_EVENT);

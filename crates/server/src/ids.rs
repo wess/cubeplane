@@ -72,6 +72,7 @@ pub mod play_cb {
     pub const UNLOAD_CHUNK: i32 = 0x1e;
     pub const GAME_EVENT: i32 = 0x1f;
     pub const HURT_ANIMATION: i32 = 0x21;
+    pub const INITIALIZE_WORLD_BORDER: i32 = 0x22;
     pub const KEEP_ALIVE: i32 = 0x23;
     pub const CHUNK_DATA: i32 = 0x24;
     pub const LOGIN: i32 = 0x28;

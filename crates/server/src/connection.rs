@@ -306,6 +306,10 @@ where
         &text::colored("cubeplane", "gold"),
         &text::colored("Rust engine · JS mods", "gray"),
     ));
+    player.send(cb::init_world_border(shared.config.world.border_diameter));
+    if shared.raining() {
+        player.send(cb::game_event(2, 0.0)); // begin raining
+    }
     // "Start waiting for level chunks" so the client renders the world.
     player.send(cb::game_event(13, 0.0));
 
@@ -423,7 +427,7 @@ async fn play_loop<R: AsyncRead + Unpin>(
         let play = serverbound::parse_play(raw)?;
         match play {
             Play::SetPosition { x, y, z, on_ground } => {
-                if !accept_move(player, x, z) {
+                if !accept_move(shared, player, x, z) {
                     continue;
                 }
                 player.update(|s| {
@@ -437,7 +441,7 @@ async fn play_loop<R: AsyncRead + Unpin>(
                 maybe_stream(shared, player, loaded, last_center);
             }
             Play::SetPositionRotation { x, y, z, yaw, pitch, on_ground } => {
-                if !accept_move(player, x, z) {
+                if !accept_move(shared, player, x, z) {
                     continue;
                 }
                 player.update(|s| {
@@ -484,6 +488,7 @@ async fn play_loop<R: AsyncRead + Unpin>(
             Play::BlockPlace { x, y, z, face, sequence } => {
                 // Interacting with a lever/chest/sign takes priority over placing.
                 if !try_toggle_lever(shared, x, y, z)
+                    && !try_use_bed(shared, player, x, y, z)
                     && !try_open_container(shared, player, x, y, z)
                     && !try_open_furnace(shared, player, x, y, z)
                     && !try_read_sign(shared, player, x, y, z)
@@ -595,14 +600,16 @@ fn broadcast_move(shared: &Arc<Shared>, player: &Player) {
 /// Basic movement anti-cheat: reject implausible horizontal jumps (teleport /
 /// speed hacks) by snapping the player back to their last good position.
 /// Generous so legitimate sprinting/packets are never rejected.
-fn accept_move(player: &Player, x: f64, z: f64) -> bool {
+fn accept_move(shared: &Arc<Shared>, player: &Player, x: f64, z: f64) -> bool {
     if player.state().riding.is_some() {
         return true; // vehicle movement is handled separately
     }
     let s = player.state();
     let (dx, dz) = (x - s.x, z - s.z);
     let limit = if player.gamemode() == 1 { 40.0 } else { 12.0 };
-    if dx * dx + dz * dz > limit * limit {
+    // Reject implausible jumps (teleport/speed hacks) or moves past the border.
+    let radius = shared.config.world.border_diameter / 2.0;
+    if dx * dx + dz * dz > limit * limit || x.abs() > radius || z.abs() > radius {
         player.send(cb::sync_position(s.x, s.y, s.z, s.yaw, s.pitch, 0, 0));
         return false;
     }
@@ -715,7 +722,8 @@ fn respawn_player(
     last_center: &mut (i32, i32),
 ) {
     combat::revive(player);
-    let spawn = shared.world.lock().unwrap().spawn();
+    // Respawn at the player's bed if they have one, else world spawn.
+    let spawn = player.state().spawn_point.unwrap_or_else(|| shared.world.lock().unwrap().spawn());
     let is_flat = shared.world.lock().unwrap().generator_name() == "flat";
     player.update(|s| {
         s.x = spawn.0;
@@ -949,6 +957,30 @@ fn try_toggle_lever(shared: &Arc<Shared>, x: i32, y: i32, z: i32) -> bool {
     }
     shared.broadcast(cb::block_update(x, y, z, toggled));
     crate::sim::redstone_update(shared, x, y, z);
+    true
+}
+
+/// Sleep in / set spawn at a bed. Returns true if a bed was clicked.
+fn try_use_bed(shared: &Arc<Shared>, player: &Player, x: i32, y: i32, z: i32) -> bool {
+    let is_bed = {
+        let mut w = shared.world.lock().unwrap();
+        cubeplane_world::block::info(w.get_block(x, y, z)).name.ends_with("_bed")
+    };
+    if !is_bed {
+        return false;
+    }
+    // Set the bed spawn point and update the compass.
+    player.update(|s| s.spawn_point = Some((x as f64 + 0.5, y as f64, z as f64 + 0.5)));
+    player.send(cb::spawn_position(x, y, z, 0.0));
+    player.send(cb::system_chat(&text::colored("Spawn point set.", "green"), false));
+
+    // Sleeping at night skips to morning (lenient single-sleeper rule).
+    let time = shared.world_time();
+    if (13_000..23_000).contains(&time) {
+        shared.set_time(1000);
+        shared.broadcast(cb::update_time(0, 1000));
+        shared.broadcast(cb::system_chat(&text::colored(format!("{} slept; good morning!", player.name), "yellow"), false));
+    }
     true
 }
 

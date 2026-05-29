@@ -64,6 +64,8 @@ pub struct Shared {
     total_joins: AtomicU64,
     /// World time of day in ticks (0..24000), advanced by the game loop.
     world_time: std::sync::atomic::AtomicI64,
+    /// Whether it is currently raining.
+    raining: std::sync::atomic::AtomicBool,
     pub mods: Option<ModRuntime>,
     /// RSA keypair for online-mode encryption (present only when enabled).
     pub server_key: Option<Arc<crate::encryption::ServerKey>>,
@@ -97,6 +99,7 @@ impl Shared {
             next_entity_id: AtomicI32::new(1),
             total_joins: AtomicU64::new(0),
             world_time: std::sync::atomic::AtomicI64::new(1000),
+            raining: std::sync::atomic::AtomicBool::new(false),
             ai: RwLock::new(config_ai),
             villagers: RwLock::new(HashMap::new()),
             mods,
@@ -335,6 +338,16 @@ impl Shared {
     /// Set the time of day.
     pub fn set_time(&self, time: i64) {
         self.world_time.store(time.rem_euclid(24_000), Ordering::Relaxed);
+    }
+
+    /// Whether it is raining.
+    pub fn raining(&self) -> bool {
+        self.raining.load(Ordering::Relaxed)
+    }
+
+    /// Set the weather state.
+    pub fn set_raining(&self, raining: bool) {
+        self.raining.store(raining, Ordering::Relaxed);
     }
 
     /// Send a payload to every connected player.

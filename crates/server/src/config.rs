@@ -103,6 +103,8 @@ pub struct WorldConfig {
     pub keep_inventory: bool,
     /// Spawn hostile mobs (otherwise only passive animals appear).
     pub spawn_hostiles: bool,
+    /// World border diameter in blocks (default is effectively unlimited).
+    pub border_diameter: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -148,6 +150,7 @@ impl Default for WorldConfig {
             format: "delta".into(),
             keep_inventory: false,
             spawn_hostiles: true,
+            border_diameter: 60_000_000.0,
         }
     }
 }

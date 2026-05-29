@@ -291,11 +291,23 @@ fn restore_entities(shared: &Arc<Shared>, ents: persistence::EntitySave) {
 
 /// The 20 TPS server clock: drives mod ticks, keep-alives and world time.
 async fn game_loop(shared: Arc<Shared>) {
+    use rand::Rng;
     let mut interval = tokio::time::interval(Duration::from_millis(50));
     let mut ticks: u64 = 0;
+    // Weather flips after a random 3–10 minute spell.
+    let mut weather_timer: u64 = rand::thread_rng().gen_range(3600..12000);
     loop {
         interval.tick().await;
         ticks += 1;
+
+        // Weather cycle.
+        weather_timer = weather_timer.saturating_sub(1);
+        if weather_timer == 0 {
+            let raining = !shared.raining();
+            shared.set_raining(raining);
+            shared.broadcast(clientbound::game_event(if raining { 2 } else { 1 }, 0.0));
+            weather_timer = rand::thread_rng().gen_range(3600..12000);
+        }
 
         // Advance the world clock; mobs, items and projectiles run every tick.
         let time_of_day = shared.advance_time();
