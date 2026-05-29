@@ -82,6 +82,7 @@ pub fn spawn_arrow(shared: &Arc<Shared>, owner: i32, x: f64, y: f64, z: f64, dx:
         ((vx * 8000.0) as i16, (vy * 8000.0) as i16, (vz * 8000.0) as i16),
     ));
     shared.add_projectile(Projectile { entity_id, x, y, z, vx, vy, vz, damage, age: 0, owner });
+    shared.broadcast(cb::sound_effect("entity.arrow.shoot", 6, x, y, z, 1.0, 1.0));
 }
 
 /// Advance item entities and projectiles by one tick.

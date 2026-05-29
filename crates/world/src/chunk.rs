@@ -178,14 +178,27 @@ pub struct Chunk {
     pub cx: i32,
     pub cz: i32,
     sections: Vec<Section>,
+    /// Cached lighting, invalidated on edit and recomputed lazily.
+    light: Option<LightData>,
 }
 
 impl Chunk {
+    /// Cached lighting, if computed since the last edit.
+    pub fn cached_light(&self) -> Option<&LightData> {
+        self.light.as_ref()
+    }
+
+    /// Store computed lighting for reuse on subsequent sends.
+    pub fn set_light(&mut self, light: LightData) {
+        self.light = Some(light);
+    }
+
     /// Create an all-air chunk at the given chunk coordinates.
     pub fn new(cx: i32, cz: i32) -> Self {
         Chunk {
             cx,
             cz,
+            light: None,
             sections: vec![Section::default(); SECTION_COUNT],
         }
     }
@@ -202,6 +215,7 @@ impl Chunk {
     pub fn set_block(&mut self, x: usize, y: i32, z: usize, state: StateId) {
         if let Some((s, ly)) = self.section_of(y) {
             self.sections[s].set(x, ly, z, state);
+            self.light = None; // invalidate cached lighting
         }
     }
 
@@ -409,6 +423,7 @@ impl Chunk {
 }
 
 /// Pre-computed light payload for the Chunk Data / Update Light packets.
+#[derive(Clone)]
 pub struct LightData {
     pub sky_light_mask: u64,
     pub block_light_mask: u64,

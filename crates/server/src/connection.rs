@@ -612,7 +612,16 @@ fn stream_chunks(
             let mut world = shared.world.lock().unwrap();
             world.chunk(x, z).clone()
         };
-        player.send(cb::chunk_data(&chunk));
+        let light = match chunk.cached_light() {
+            Some(l) => l.clone(),
+            None => {
+                let l = chunk.compute_light();
+                // Cache it back so re-sends to other players don't recompute.
+                shared.world.lock().unwrap().store_light(x, z, l.clone());
+                l
+            }
+        };
+        player.send(cb::chunk_data(&chunk, &light));
         loaded.insert((x, z));
     }
 
@@ -1056,6 +1065,8 @@ fn try_eat(player: &Player) {
         (s.health, s.food, s.saturation)
     });
     player.send(cb::update_health(health, food, saturation));
+    let s = player.state();
+    player.send(cb::sound_effect("entity.generic.eat", 7, s.x, s.y, s.z, 0.8, 1.0));
     if player.gamemode() != 1 {
         let slot = crate::inventory::HOTBAR_START + held as usize;
         let after = player.inventory(|inv| inv.consume_held(held));

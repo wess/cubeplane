@@ -422,6 +422,7 @@ pub fn player_attack(shared: &Arc<Shared>, attacker: &Player, target: i32, damag
 
     shared.broadcast(cb::hurt_animation(target, 0.0));
     shared.broadcast(cb::entity_status(target, 2));
+    shared.broadcast(cb::sound_effect("entity.generic.hurt", 6, mx, attacker.state().y, mz, 1.0, 1.0));
 
     // Knock the mob away from the attacker.
     let s = attacker.state();

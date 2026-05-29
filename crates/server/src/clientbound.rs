@@ -9,7 +9,7 @@ use serde_json::Value as Json;
 use uuid::Uuid;
 
 use cubeplane_protocol::ProtoWrite;
-use cubeplane_world::chunk::{self, Chunk};
+use cubeplane_world::chunk::{self, Chunk, LightData};
 
 use crate::ids::{login_cb, play_cb, status_cb};
 use crate::item::ItemStack;
@@ -157,7 +157,7 @@ pub fn set_center_chunk(cx: i32, cz: i32) -> BytesMut {
 
 /// Chunk Data and Update Light. Encapsulates sections, heightmaps and full
 /// skylight so the client renders a lit, walkable column.
-pub fn chunk_data(c: &Chunk) -> BytesMut {
+pub fn chunk_data(c: &Chunk, light: &LightData) -> BytesMut {
     let mut b = pkt(play_cb::CHUNK_DATA);
     b.write_i32(c.cx);
     b.write_i32(c.cz);
@@ -169,7 +169,6 @@ pub fn chunk_data(c: &Chunk) -> BytesMut {
 
     b.write_varint(0); // block entity count
 
-    let light = c.compute_light();
     chunk::write_bitset(&mut b, light.sky_light_mask);
     chunk::write_bitset(&mut b, light.block_light_mask);
     chunk::write_bitset(&mut b, light.empty_sky_light_mask);
@@ -624,13 +623,16 @@ pub fn explosion(x: f64, y: f64, z: f64, radius: f32, offsets: &[(i8, i8, i8)]) 
     b
 }
 
-/// Play a registry sound at a block position. `sound_id` is the sound registry
-/// id; `category` is a soundSource id (7 = player, 5 = hostile, 4 = block).
-/// Exposed for mods/future use.
-#[allow(clippy::too_many_arguments, dead_code)]
-pub fn sound_effect(sound_id: i32, category: i32, x: f64, y: f64, z: f64, volume: f32, pitch: f32) -> BytesMut {
+/// Play a sound *by name* at a position (e.g. "entity.player.hurt"). Uses the
+/// inline sound-event form, so no numeric registry id is needed. `category` is
+/// a soundSource id (7 = player, 6 = neutral, 5 = hostile, 4 = block).
+#[allow(clippy::too_many_arguments)]
+pub fn sound_effect(name: &str, category: i32, x: f64, y: f64, z: f64, volume: f32, pitch: f32) -> BytesMut {
     let mut b = pkt(play_cb::SOUND_EFFECT);
-    b.write_varint(sound_id + 1); // registryEntryHolder: id+1, 0 = inline
+    b.write_varint(0); // registryEntryHolder: 0 = inline definition
+    let ident = if name.contains(':') { name.to_string() } else { format!("minecraft:{name}") };
+    b.write_string(&ident);
+    b.write_bool(false); // no fixed range
     b.write_varint(category);
     b.write_i32((x * 8.0) as i32);
     b.write_i32((y * 8.0) as i32);

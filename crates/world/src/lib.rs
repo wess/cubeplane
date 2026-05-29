@@ -135,6 +135,13 @@ impl World {
         self.chunks.keys().copied().collect()
     }
 
+    /// Cache computed lighting on a loaded chunk for reuse on later sends.
+    pub fn store_light(&mut self, cx: i32, cz: i32, light: chunk::LightData) {
+        if let Some(c) = self.chunks.get_mut(&(cx, cz)) {
+            c.set_light(light);
+        }
+    }
+
     /// Drop every loaded chunk not in `keep` from memory, returning the number
     /// unloaded. Edits persist in the edit map, so unloaded chunks regenerate
     /// identically on demand.

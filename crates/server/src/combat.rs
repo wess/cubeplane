@@ -41,9 +41,12 @@ pub fn damage_player(shared: &Arc<Shared>, player: &Player, amount: f32, cause: 
 
     // Update the victim's HUD and flash everyone else's view of them.
     player.send(cb::update_health(new_health, food, saturation));
-    let yaw = player.state().yaw;
+    let s = player.state();
+    let yaw = s.yaw;
     shared.broadcast_except(player.entity_id, cb::hurt_animation(player.entity_id, yaw));
     shared.broadcast_except(player.entity_id, cb::entity_status(player.entity_id, 2));
+    let sound = if just_died { "entity.player.death" } else { "entity.player.hurt" };
+    shared.broadcast(cb::sound_effect(sound, 7, s.x, s.y, s.z, 1.0, 1.0));
 
     if just_died {
         let msg = text::plain(format!("{} {}", player.name, cause));
@@ -106,6 +109,8 @@ pub fn grant_xp(player: &Player, amount: i32) {
         s.xp_total
     });
     player.send(cb::set_experience(xp_bar(total), total / 10, total));
+    let s = player.state();
+    player.send(cb::sound_effect("entity.experience_orb.pickup", 7, s.x, s.y, s.z, 0.3, 1.0));
 }
 
 /// Fraction of the way to the next level for a given total (0.0..1.0).

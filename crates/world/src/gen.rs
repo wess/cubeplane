@@ -92,25 +92,58 @@ impl TerrainGenerator {
 impl Generator for TerrainGenerator {
     fn generate(&self, cx: i32, cz: i32) -> Chunk {
         let mut chunk = Chunk::new(cx, cz);
+
+        // Resolve ore / surface block ids once per chunk (full registry lookup).
+        let coal = block::state_by_name("coal_ore").unwrap_or(block::STONE);
+        let iron = block::state_by_name("iron_ore").unwrap_or(block::STONE);
+        let gold = block::state_by_name("gold_ore").unwrap_or(block::STONE);
+        let diamond = block::state_by_name("diamond_ore").unwrap_or(block::STONE);
+        let snow = block::state_by_name("snow_block").unwrap_or(block::GRASS_BLOCK);
+
         for lx in 0..SECTION_DIM {
             for lz in 0..SECTION_DIM {
                 let wx = cx * 16 + lx as i32;
                 let wz = cz * 16 + lz as i32;
                 let surface = self.height_at(wx, wz);
+                // A slow temperature field drives surface "biomes".
+                let temp = value_noise(self.seed ^ 0x7E33, wx as f64 / 160.0, wz as f64 / 160.0);
 
                 chunk.set_block(lx, MIN_Y, lz, block::BEDROCK);
                 for y in (MIN_Y + 1)..surface {
-                    // Stone underground, with a few blocks of dirt near the top.
-                    let block = if y >= surface - 4 {
-                        block::DIRT
+                    // Carve caves out of deep stone with 3D noise.
+                    if y < surface - 3 && y > MIN_Y + 3 {
+                        let cave = value_noise_3d(self.seed ^ 0xCA7E, wx as f64 / 16.0, y as f64 / 12.0, wz as f64 / 16.0);
+                        if cave > 0.55 {
+                            continue; // leave air
+                        }
+                    }
+                    if y >= surface - 4 {
+                        chunk.set_block(lx, y, lz, block::DIRT);
+                        continue;
+                    }
+                    // Stone, with sparse depth-dependent ores.
+                    let h = hash_to_unit(self.seed ^ 0x0E, wx as i64, (y as i64) << 8 | wz as i64);
+                    let bucket = (h * 4096.0) as u32;
+                    let ore = if y < -48 && bucket < 4 {
+                        diamond
+                    } else if y < 8 && bucket < 16 {
+                        gold
+                    } else if bucket < 64 {
+                        iron
+                    } else if bucket < 160 {
+                        coal
                     } else {
                         block::STONE
                     };
-                    chunk.set_block(lx, y, lz, block);
+                    chunk.set_block(lx, y, lz, ore);
                 }
 
-                // Surface block depends on whether we're under the sea level.
+                // Surface block: sand at the shore, snow when cold, else grass.
                 let top = if surface <= self.sea_level {
+                    block::SAND
+                } else if temp < -0.45 {
+                    snow
+                } else if temp > 0.5 {
                     block::SAND
                 } else {
                     block::GRASS_BLOCK
@@ -120,6 +153,16 @@ impl Generator for TerrainGenerator {
                 // Fill water up to sea level.
                 for y in (surface + 1)..=self.sea_level {
                     chunk.set_block(lx, y, lz, block::WATER);
+                }
+
+                // Occasional natural tree on temperate grass (kept off chunk
+                // edges so the canopy isn't clipped).
+                if top == block::GRASS_BLOCK
+                    && (2..14).contains(&lx)
+                    && (2..14).contains(&lz)
+                    && hash_to_unit(self.seed ^ 0x7EEE, wx as i64, wz as i64) > 0.992
+                {
+                    grow_tree(&mut chunk, lx, surface + 1, lz);
                 }
             }
         }
@@ -133,6 +176,34 @@ impl Generator for TerrainGenerator {
     fn name(&self) -> &'static str {
         "terrain"
     }
+}
+
+/// Place a small oak tree (trunk + canopy) at a local column position.
+fn grow_tree(chunk: &mut Chunk, x: usize, base_y: i32, z: usize) {
+    let height = 4 + ((x + z) % 2) as i32;
+    for i in 0..height {
+        chunk.set_block(x, base_y + i, z, block::OAK_LOG);
+    }
+    for dy in (height - 2)..=(height + 1) {
+        let r = if dy >= height { 1i32 } else { 2 };
+        for dx in -r..=r {
+            for dz in -r..=r {
+                if dx == 0 && dz == 0 && dy < height {
+                    continue;
+                }
+                let (lx, lz) = (x as i32 + dx, z as i32 + dz);
+                if (0..16).contains(&lx) && (0..16).contains(&lz) {
+                    chunk.set_block(lx as usize, base_y + dy, lz as usize, block::OAK_LEAVES);
+                }
+            }
+        }
+    }
+}
+
+/// Deterministic 3D value noise in roughly `[0, 1]` (for caves).
+fn value_noise_3d(seed: u64, x: f64, y: f64, z: f64) -> f64 {
+    let n = value_noise(seed, x, z) * 0.5 + value_noise(seed ^ 0xABCD, x + y * 0.7, z - y * 0.7) * 0.5;
+    (n + 1.0) * 0.5
 }
 
 /// Deterministic 2D value noise in roughly `[-1, 1]`, smoothly interpolated.
