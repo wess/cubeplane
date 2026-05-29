@@ -43,6 +43,10 @@ pub struct PlayerState {
     pub open_furnace: Option<(i32, i32, i32)>,
     /// Position of the brewing stand whose window is open, if any.
     pub open_brewing: Option<(i32, i32, i32)>,
+    /// True while a crafting-table (3×3) window is open.
+    pub open_crafting: bool,
+    /// The 3×3 crafting-table grid contents while open.
+    pub craft_grid: [crate::item::ItemStack; 9],
     /// Entity id of the vehicle the player is riding, if any.
     pub riding: Option<i32>,
     /// Entity id of the AI villager the player is currently conversing with.
@@ -78,6 +82,8 @@ impl PlayerState {
             open_merchant: false,
             open_furnace: None,
             open_brewing: None,
+            open_crafting: false,
+            craft_grid: [crate::item::ItemStack::EMPTY; 9],
             riding: None,
             talking_to: None,
             spawn_point: None,

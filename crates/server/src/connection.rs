@@ -509,6 +509,7 @@ async fn play_loop<R: AsyncRead + Unpin>(
                     && !try_open_container(shared, player, x, y, z)
                     && !try_open_furnace(shared, player, x, y, z)
                     && !try_open_brewing(shared, player, x, y, z)
+                    && !try_open_crafting(shared, player, x, y, z)
                     && !try_read_sign(shared, player, x, y, z)
                 {
                     place_block(shared, player, x, y, z, face);
@@ -537,6 +538,9 @@ async fn play_loop<R: AsyncRead + Unpin>(
                 player.send(cb::system_chat(&text::colored("Sign saved.", "gray"), false));
             }
             Play::CloseWindow => {
+                if player.state().open_crafting {
+                    close_crafting(player);
+                }
                 player.update(|s| {
                     s.open_container = None;
                     s.open_merchant = false;
@@ -1182,6 +1186,100 @@ fn try_open_furnace(shared: &Arc<Shared>, player: &Player, x: i32, y: i32, z: i3
     true
 }
 
+/// Open the 3×3 crafting table if the player clicked one.
+fn try_open_crafting(shared: &Arc<Shared>, player: &Player, x: i32, y: i32, z: i32) -> bool {
+    let is_table = {
+        let mut w = shared.dim_world(player.state().dimension).lock().unwrap();
+        cubeplane_world::block::info(w.get_block(x, y, z)).name == "crafting_table"
+    };
+    if !is_table {
+        return false;
+    }
+    player.update(|s| {
+        s.open_crafting = true;
+        s.craft_grid = [item::ItemStack::EMPTY; 9];
+    });
+    // Window 3, type 11 (crafting). Slots: 0 output, 1..9 grid, then inventory.
+    let inv = player.inventory(|i| i.slots().to_vec());
+    let mut items = vec![item::ItemStack::EMPTY; 10];
+    items.extend_from_slice(&inv[9..45]);
+    player.send(cb::open_window(3, 11, &text::plain("Crafting")));
+    player.send(cb::window_items(3, 0, &items, item::ItemStack::EMPTY));
+    true
+}
+
+/// Handle a click in the open crafting-table window.
+fn craft_window_click(player: &Player, changed: &[(i16, item::ItemStack)]) {
+    let took_output = changed.iter().any(|(s, _)| *s == 0);
+    player.update(|st| {
+        for (slot, stack) in changed {
+            match *slot {
+                1..=9 => st.craft_grid[*slot as usize - 1] = *stack,
+                s if s >= 10 => {} // inventory handled below (needs inventory lock)
+                _ => {}
+            }
+        }
+    });
+    // Inventory-side slots map 10.. → inventory 9...
+    player.inventory(|i| {
+        for (slot, stack) in changed {
+            if *slot >= 10 {
+                i.set(*slot as usize - 10 + 9, *stack);
+            }
+        }
+    });
+
+    let grid: Vec<Option<i32>> = player
+        .state()
+        .craft_grid
+        .iter()
+        .map(|s| (!s.is_empty()).then_some(s.id))
+        .collect();
+    if took_output && crate::recipe::match_grid(&grid).is_some() {
+        player.update(|st| {
+            for cell in st.craft_grid.iter_mut() {
+                if !cell.is_empty() {
+                    cell.count -= 1;
+                    if cell.count == 0 {
+                        *cell = item::ItemStack::EMPTY;
+                    }
+                }
+            }
+        });
+        let g = player.state().craft_grid;
+        for (i, cell) in g.iter().enumerate() {
+            player.send(cb::set_slot(3, 0, (i + 1) as i16, *cell));
+        }
+    }
+    let grid: Vec<Option<i32>> = player
+        .state()
+        .craft_grid
+        .iter()
+        .map(|s| (!s.is_empty()).then_some(s.id))
+        .collect();
+    let out = crate::recipe::match_grid(&grid)
+        .map(|r| item::ItemStack::new(r.output_id, r.output_count))
+        .unwrap_or(item::ItemStack::EMPTY);
+    player.send(cb::set_slot(3, 0, 0, out));
+}
+
+/// Return any items left in the crafting grid to the inventory and close it.
+fn close_crafting(player: &Player) {
+    let grid = player.state().craft_grid;
+    player.inventory(|i| {
+        for cell in grid {
+            if !cell.is_empty() {
+                i.add(cell.id, cell.count);
+            }
+        }
+    });
+    player.update(|s| {
+        s.open_crafting = false;
+        s.craft_grid = [item::ItemStack::EMPTY; 9];
+    });
+    player.sync_inventory();
+}
+
 /// Open the brewing screen if the player clicked a brewing stand.
 fn try_open_brewing(shared: &Arc<Shared>, player: &Player, x: i32, y: i32, z: i32) -> bool {
     let is_stand = {
@@ -1247,7 +1345,7 @@ fn apply_window_click(shared: &Arc<Shared>, player: &Player, window_id: u8, chan
     if player.state().open_merchant {
         return;
     }
-    // Furnace / brewing windows route to their block entities.
+    // Furnace / brewing / crafting windows route to their handlers.
     if window_id != 0 {
         if let Some(pos) = player.state().open_furnace {
             crate::furnace::click(shared, player, pos, changed);
@@ -1255,6 +1353,10 @@ fn apply_window_click(shared: &Arc<Shared>, player: &Player, window_id: u8, chan
         }
         if let Some(pos) = player.state().open_brewing {
             crate::brewing::click(shared, player, pos, changed);
+            return;
+        }
+        if player.state().open_crafting {
+            craft_window_click(player, changed);
             return;
         }
     }
