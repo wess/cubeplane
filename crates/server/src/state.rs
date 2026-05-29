@@ -24,6 +24,8 @@ pub const CONTAINER_SIZE: usize = 27;
 type PrimedTnt = (i32, f64, f64, f64, u32);
 /// A button counting down to release: `(dim, x, y, z, ticks remaining)`.
 type ActiveButton = (u8, i32, i32, i32, u32);
+/// A pending block change: `(dim, x, y, z, target state, ticks remaining)`.
+type ScheduledChange = (u8, i32, i32, i32, u16, u32);
 
 /// A furnace block entity: input/fuel/output plus cook & burn timers.
 #[derive(Clone, Default)]
@@ -85,6 +87,8 @@ pub struct Shared {
     pressed_plates: Mutex<HashSet<(u8, i32, i32, i32)>>,
     /// Buttons counting down to release: `(dim, x, y, z, ticks remaining)`.
     active_buttons: Mutex<Vec<ActiveButton>>,
+    /// Pending delayed block changes (repeater output, observer pulse, etc.).
+    scheduled: Mutex<Vec<ScheduledChange>>,
     next_entity_id: AtomicI32,
     total_joins: AtomicU64,
     /// World time of day in ticks (0..24000), advanced by the game loop.
@@ -129,6 +133,7 @@ impl Shared {
             primed_tnt: Mutex::new(Vec::new()),
             pressed_plates: Mutex::new(HashSet::new()),
             active_buttons: Mutex::new(Vec::new()),
+            scheduled: Mutex::new(Vec::new()),
             next_entity_id: AtomicI32::new(1),
             total_joins: AtomicU64::new(0),
             world_time: std::sync::atomic::AtomicI64::new(1000),
@@ -323,6 +328,39 @@ impl Shared {
             }
         });
         released
+    }
+
+    /// Schedule a delayed block change, replacing any pending change already
+    /// queued for the same position (so a re-trigger updates the target).
+    pub fn schedule_block(&self, dim: u8, x: i32, y: i32, z: i32, state: u16, ticks: u32) {
+        let mut q = self.scheduled.lock().unwrap();
+        q.retain(|e| !(e.0 == dim && e.1 == x && e.2 == y && e.3 == z));
+        q.push((dim, x, y, z, state, ticks));
+    }
+
+    /// Whether a block change is already pending at a position.
+    pub fn change_pending(&self, dim: u8, x: i32, y: i32, z: i32) -> bool {
+        self.scheduled
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|e| e.0 == dim && e.1 == x && e.2 == y && e.3 == z)
+    }
+
+    /// Tick scheduled changes, returning those due this tick.
+    pub fn tick_scheduled(&self) -> Vec<(u8, i32, i32, i32, u16)> {
+        let mut q = self.scheduled.lock().unwrap();
+        let mut due = Vec::new();
+        q.retain_mut(|(dim, x, y, z, state, ticks)| {
+            *ticks = ticks.saturating_sub(1);
+            if *ticks == 0 {
+                due.push((*dim, *x, *y, *z, *state));
+                false
+            } else {
+                true
+            }
+        });
+        due
     }
 
     /// Ensure a furnace block entity exists at `pos`.

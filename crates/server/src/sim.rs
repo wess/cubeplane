@@ -313,7 +313,7 @@ pub fn tnt_tick(shared: &Arc<Shared>) {
 
 /// Whether a block participates in redstone (so we know when to recompute).
 pub fn is_redstone(name: &str) -> bool {
-    is_redstone_source(name) || is_actuator(name)
+    is_redstone_source(name) || is_actuator(name) || is_logic(name)
 }
 
 /// A block that emits redstone power.
@@ -331,6 +331,12 @@ fn is_actuator(name: &str) -> bool {
         || name.ends_with("_fence_gate")
 }
 
+/// A directional logic component (repeater/comparator) that we re-evaluate
+/// during a flood and toggle after a delay.
+fn is_logic(name: &str) -> bool {
+    matches!(name, "repeater" | "comparator")
+}
+
 /// Recompute redstone power in a box around a change: flood power from sources
 /// through wire (−1 per step) and light/unlight lamps accordingly. Bounded and
 /// local, so it's cheap to run on each redstone-related block change.
@@ -342,6 +348,7 @@ pub fn redstone_update(shared: &Arc<Shared>, ox: i32, oy: i32, oz: i32) {
     // Snapshot redstone-relevant blocks in the box.
     let mut wires: HashMap<(i32, i32, i32), u16> = HashMap::new();
     let mut actuators: Vec<(i32, i32, i32, u16)> = Vec::new();
+    let mut repeaters: Vec<(i32, i32, i32, u16)> = Vec::new();
     let mut power: HashMap<(i32, i32, i32), u32> = HashMap::new();
     let mut queue: VecDeque<(i32, i32, i32, u32)> = VecDeque::new();
 
@@ -355,6 +362,8 @@ pub fn redstone_update(shared: &Arc<Shared>, ox: i32, oy: i32, oz: i32) {
                     wires.insert((x, y, z), s);
                 } else if is_actuator(name) {
                     actuators.push((x, y, z, s));
+                } else if matches!(name, "repeater" | "comparator") {
+                    repeaters.push((x, y, z, s));
                 } else if name == "redstone_block" {
                     queue.push_back((x, y, z, 15));
                 } else if matches!(name, "redstone_torch" | "redstone_wall_torch") {
@@ -366,6 +375,18 @@ pub fn redstone_update(shared: &Arc<Shared>, ox: i32, oy: i32, oz: i32) {
                 {
                     queue.push_back((x, y, z, 15));
                 }
+            }
+        }
+    }
+
+    // A powered repeater/comparator injects full power into the block it faces.
+    for (x, y, z, s) in &repeaters {
+        if block::prop_index(*s, "powered") == Some(0) {
+            if let Some(facing) = block::prop_index(*s, "facing") {
+                let (dx, dz) = dir4(facing);
+                let front = (x + dx, *y, z + dz);
+                power.insert(front, 15);
+                queue.push_back((front.0, front.1, front.2, 15));
             }
         }
     }
@@ -397,13 +418,17 @@ pub fn redstone_update(shared: &Arc<Shared>, ox: i32, oy: i32, oz: i32) {
     }
     for (x, y, z, state) in actuators {
         let name = block::name_of(state);
+        // Power can also be injected directly onto the actuator's own cell
+        // (e.g. a repeater pointing straight into a lamp).
+        let own = power.get(&(x, y, z)).copied().unwrap_or(0) > 0;
         // A door is powered if power reaches either of its two halves.
-        let powered = if name.ends_with("_door") {
-            let other = if block::prop_index(state, "half") == Some(0) { y - 1 } else { y + 1 };
-            powered_at(&power, &mut world, x, y, z) || powered_at(&power, &mut world, x, other, z)
-        } else {
-            powered_at(&power, &mut world, x, y, z)
-        };
+        let powered = own
+            || if name.ends_with("_door") {
+                let other = if block::prop_index(state, "half") == Some(0) { y - 1 } else { y + 1 };
+                powered_at(&power, &mut world, x, y, z) || powered_at(&power, &mut world, x, other, z)
+            } else {
+                powered_at(&power, &mut world, x, y, z)
+            };
         // Lamps drive "lit" (0 = on); doors/gates drive "open" (0 = open).
         let prop = if name == "redstone_lamp" { "lit" } else { "open" };
         let want = block::with_prop(state, prop, if powered { 0 } else { 1 });
@@ -414,10 +439,97 @@ pub fn redstone_update(shared: &Arc<Shared>, ox: i32, oy: i32, oz: i32) {
     for (x, y, z, s) in &changes {
         world.set_block(*x, *y, *z, *s);
     }
+
+    // Re-evaluate repeaters/comparators: schedule output toggles after delay.
+    for (x, y, z, state) in &repeaters {
+        let (x, y, z) = (*x, *y, *z);
+        let name = block::name_of(*state);
+        let facing = match block::prop_index(*state, "facing") {
+            Some(f) => f,
+            None => continue,
+        };
+        let (dx, dz) = dir4(facing);
+        // Input comes from directly behind (opposite the facing/output side).
+        let back = (x - dx, y, z - dz);
+        let back_state = world.get_block(back.0, back.1, back.2);
+        let back_powered = power.get(&back).copied().unwrap_or(0) > 0
+            || is_source(&back_state)
+            || repeater_feeds(&mut world, back, (x, y, z));
+        let desired_on = if name == "comparator" {
+            // Comparator (compare mode): pass the back signal if no stronger
+            // signal sits on either side.
+            let sides = comparator_side_power(&power, &mut world, x, y, z, facing);
+            back_powered && sides == 0
+        } else {
+            back_powered
+        };
+        let current_on = block::prop_index(*state, "powered") == Some(0);
+        if desired_on != current_on && !shared.change_pending(0, x, y, z) {
+            let want = block::with_prop(*state, "powered", if desired_on { 0 } else { 1 });
+            // Repeater delay is 1–4 (2 game ticks each); comparators take 2.
+            let ticks = if name == "comparator" {
+                2
+            } else {
+                ((block::prop_index(*state, "delay").unwrap_or(0) + 1) * 2) as u32
+            };
+            shared.schedule_block(0, x, y, z, want, ticks);
+        }
+    }
+
     drop(world);
     for (x, y, z, s) in changes {
         shared.broadcast(cb::block_update(x, y, z, s));
     }
+}
+
+/// 4-value facing direction `[north(-Z), south(+Z), west(-X), east(+X)]`.
+fn dir4(idx: u32) -> (i32, i32) {
+    match idx {
+        0 => (0, -1),
+        1 => (0, 1),
+        2 => (-1, 0),
+        _ => (1, 0),
+    }
+}
+
+/// Whether the block at `from` is a powered repeater/comparator whose output
+/// faces `into`.
+fn repeater_feeds(world: &mut cubeplane_world::World, from: (i32, i32, i32), into: (i32, i32, i32)) -> bool {
+    let s = world.get_block(from.0, from.1, from.2);
+    if !matches!(block::name_of(s), "repeater" | "comparator") {
+        return false;
+    }
+    if block::prop_index(s, "powered") != Some(0) {
+        return false;
+    }
+    if let Some(f) = block::prop_index(s, "facing") {
+        let (dx, dz) = dir4(f);
+        return (from.0 + dx, from.1, from.2 + dz) == into;
+    }
+    false
+}
+
+/// Strongest redstone signal entering a comparator from its two sides.
+fn comparator_side_power(
+    power: &std::collections::HashMap<(i32, i32, i32), u32>,
+    world: &mut cubeplane_world::World,
+    x: i32,
+    y: i32,
+    z: i32,
+    facing: u32,
+) -> u32 {
+    // Sides are the two horizontal directions perpendicular to the facing axis:
+    // facing north/south (0/1) → sides west/east (2/3), and vice versa.
+    let sides: [u32; 2] = if facing < 2 { [2, 3] } else { [0, 1] };
+    let mut max = 0;
+    for f in sides {
+        let (dx, dz) = dir4(f);
+        let pos = (x + dx, y, z + dz);
+        let p = power.get(&pos).copied().unwrap_or(0);
+        let src = if is_source(&world.get_block(pos.0, pos.1, pos.2)) { 15 } else { 0 };
+        max = max.max(p).max(src);
+    }
+    max
 }
 
 /// Whether any of a block's six neighbours carries redstone power.
@@ -490,6 +602,30 @@ pub fn button_tick(shared: &Arc<Shared>) {
     }
 }
 
+/// Apply delayed block changes (repeater/comparator outputs) that are now due,
+/// re-running a redstone update around each so the new signal propagates.
+pub fn scheduled_tick(shared: &Arc<Shared>) {
+    for (dim, x, y, z, target) in shared.tick_scheduled() {
+        let applied = {
+            let mut w = shared.dim_world(dim).lock().unwrap();
+            // Only apply if the component is still there (it may have been mined).
+            let cur = w.get_block(x, y, z);
+            if is_logic(block::name_of(cur)) {
+                w.set_block(x, y, z, target);
+                true
+            } else {
+                false
+            }
+        };
+        if applied {
+            shared.broadcast(cb::block_update(x, y, z, target));
+            if dim == 0 {
+                redstone_update(shared, x, y, z);
+            }
+        }
+    }
+}
+
 /// Set the `powered` property of a plate/button and refresh nearby redstone.
 fn set_plate_powered(shared: &Arc<Shared>, dim: u8, x: i32, y: i32, z: i32, on: bool) {
     let updated = {
@@ -549,6 +685,25 @@ mod tests {
         let d = block::state_by_name("oak_door").unwrap();
         let opened = block::with_prop(d, "open", 0);
         assert_eq!(block::prop_index(opened, "open"), Some(0));
+    }
+
+    #[test]
+    fn logic_components_classified_and_oriented() {
+        assert!(is_logic("repeater"));
+        assert!(is_logic("comparator"));
+        assert!(!is_logic("redstone_wire"));
+        assert!(is_redstone("repeater"));
+        // 4-value facing maps to unit offsets on the X/Z plane.
+        assert_eq!(dir4(0), (0, -1)); // north
+        assert_eq!(dir4(1), (0, 1)); // south
+        assert_eq!(dir4(2), (-1, 0)); // west
+        assert_eq!(dir4(3), (1, 0)); // east
+        // A repeater carries a togglable "powered" output and a 1–4 "delay".
+        let r = block::state_by_name("repeater").unwrap();
+        let on = block::with_prop(r, "powered", 0);
+        assert_eq!(block::prop_index(on, "powered"), Some(0));
+        let d3 = block::with_prop(r, "delay", 3);
+        assert_eq!(block::prop_index(d3, "delay"), Some(3));
     }
 
     #[test]
