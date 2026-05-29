@@ -313,7 +313,12 @@ pub fn tnt_tick(shared: &Arc<Shared>) {
 
 /// Whether a block participates in redstone (so we know when to recompute).
 pub fn is_redstone(name: &str) -> bool {
-    is_redstone_source(name) || is_actuator(name) || is_logic(name)
+    is_redstone_source(name) || is_actuator(name) || is_logic(name) || is_piston(name)
+}
+
+/// A piston base block.
+fn is_piston(name: &str) -> bool {
+    matches!(name, "piston" | "sticky_piston")
 }
 
 /// A block that emits redstone power.
@@ -349,6 +354,7 @@ pub fn redstone_update(shared: &Arc<Shared>, ox: i32, oy: i32, oz: i32) {
     let mut wires: HashMap<(i32, i32, i32), u16> = HashMap::new();
     let mut actuators: Vec<(i32, i32, i32, u16)> = Vec::new();
     let mut repeaters: Vec<(i32, i32, i32, u16)> = Vec::new();
+    let mut pistons: Vec<(i32, i32, i32, u16)> = Vec::new();
     let mut power: HashMap<(i32, i32, i32), u32> = HashMap::new();
     let mut queue: VecDeque<(i32, i32, i32, u32)> = VecDeque::new();
 
@@ -364,6 +370,8 @@ pub fn redstone_update(shared: &Arc<Shared>, ox: i32, oy: i32, oz: i32) {
                     actuators.push((x, y, z, s));
                 } else if matches!(name, "repeater" | "comparator") {
                     repeaters.push((x, y, z, s));
+                } else if is_piston(name) {
+                    pistons.push((x, y, z, s));
                 } else if name == "redstone_block" {
                     queue.push_back((x, y, z, 15));
                 } else if matches!(name, "redstone_torch" | "redstone_wall_torch") {
@@ -476,10 +484,156 @@ pub fn redstone_update(shared: &Arc<Shared>, ox: i32, oy: i32, oz: i32) {
         }
     }
 
+    // Pistons extend when powered and retract when not.
+    let mut piston_changes: Vec<(i32, i32, i32, u16)> = Vec::new();
+    for (x, y, z, state) in &pistons {
+        let (x, y, z) = (*x, *y, *z);
+        let powered = powered_at(&power, &mut world, x, y, z)
+            || power.get(&(x, y, z)).copied().unwrap_or(0) > 0;
+        let extended = block::prop_index(*state, "extended") == Some(0);
+        if powered && !extended {
+            extend_piston(&mut world, x, y, z, *state, &mut piston_changes);
+        } else if !powered && extended {
+            retract_piston(&mut world, x, y, z, *state, &mut piston_changes);
+        }
+    }
+
     drop(world);
     for (x, y, z, s) in changes {
         shared.broadcast(cb::block_update(x, y, z, s));
     }
+    for (x, y, z, s) in piston_changes {
+        shared.broadcast(cb::block_update(x, y, z, s));
+    }
+}
+
+/// 6-value facing direction `[down(-Y), up(+Y), north(-Z), south(+Z), west(-X), east(+X)]`.
+fn dir6(idx: u32) -> (i32, i32, i32) {
+    match idx {
+        0 => (0, -1, 0),
+        1 => (0, 1, 0),
+        2 => (0, 0, -1),
+        3 => (0, 0, 1),
+        4 => (-1, 0, 0),
+        _ => (1, 0, 0),
+    }
+}
+
+/// Blocks a piston can shove. Excludes air, unmovable blocks and block
+/// entities (whose contents we don't relocate).
+fn is_pushable(state: u16) -> bool {
+    if block::is_air(state) {
+        return false;
+    }
+    let n = block::name_of(state);
+    !matches!(
+        n,
+        "bedrock"
+            | "obsidian"
+            | "crying_obsidian"
+            | "respawn_anchor"
+            | "reinforced_deepslate"
+            | "barrier"
+            | "end_portal_frame"
+            | "piston"
+            | "sticky_piston"
+            | "piston_head"
+            | "moving_piston"
+            | "chest"
+            | "trapped_chest"
+            | "ender_chest"
+            | "furnace"
+            | "blast_furnace"
+            | "smoker"
+            | "brewing_stand"
+            | "hopper"
+            | "dispenser"
+            | "dropper"
+            | "beacon"
+            | "spawner"
+            | "enchanting_table"
+            | "anvil"
+    ) && !n.ends_with("_sign")
+        && !n.ends_with("_shulker_box")
+}
+
+/// Try to extend a piston: shove the column in front forward one block and place
+/// the piston head. Aborts (does nothing) if the column is blocked or too long.
+fn extend_piston(world: &mut cubeplane_world::World, x: i32, y: i32, z: i32, state: u16, out: &mut Vec<(i32, i32, i32, u16)>) {
+    let facing = match block::prop_index(state, "facing") {
+        Some(f) => f,
+        None => return,
+    };
+    let (dx, dy, dz) = dir6(facing);
+    let sticky = block::name_of(state) == "sticky_piston";
+
+    // Collect the contiguous run of pushable blocks ahead until we hit air.
+    let mut col: Vec<(i32, i32, i32, u16)> = Vec::new();
+    let (mut cx, mut cy, mut cz) = (x + dx, y + dy, z + dz);
+    loop {
+        let b = world.get_block(cx, cy, cz);
+        if block::is_air(b) {
+            break;
+        }
+        if !is_pushable(b) || col.len() >= 12 {
+            return; // blocked: the piston can't extend
+        }
+        col.push((cx, cy, cz, b));
+        cx += dx;
+        cy += dy;
+        cz += dz;
+    }
+
+    // Shift the column forward from the far end so nothing is overwritten.
+    for (bx, by, bz, b) in col.iter().rev() {
+        world.set_block(bx + dx, by + dy, bz + dz, *b);
+        out.push((bx + dx, by + dy, bz + dz, *b));
+    }
+
+    // Place the head and mark the base extended.
+    let head_default = block::state_by_name("piston_head").unwrap_or(0);
+    let mut head = block::with_prop(head_default, "facing", facing);
+    head = block::with_prop(head, "type", if sticky { 1 } else { 0 });
+    world.set_block(x + dx, y + dy, z + dz, head);
+    out.push((x + dx, y + dy, z + dz, head));
+
+    let base = block::with_prop(state, "extended", 0);
+    world.set_block(x, y, z, base);
+    out.push((x, y, z, base));
+}
+
+/// Retract a piston: remove its head and, if sticky, pull the block in front back.
+fn retract_piston(world: &mut cubeplane_world::World, x: i32, y: i32, z: i32, state: u16, out: &mut Vec<(i32, i32, i32, u16)>) {
+    let facing = match block::prop_index(state, "facing") {
+        Some(f) => f,
+        None => return,
+    };
+    let (dx, dy, dz) = dir6(facing);
+    let sticky = block::name_of(state) == "sticky_piston";
+    let air = block::state_by_name("air").unwrap_or(0);
+    let head_pos = (x + dx, y + dy, z + dz);
+
+    // Remove the head if it's there.
+    if block::name_of(world.get_block(head_pos.0, head_pos.1, head_pos.2)) == "piston_head" {
+        world.set_block(head_pos.0, head_pos.1, head_pos.2, air);
+        out.push((head_pos.0, head_pos.1, head_pos.2, air));
+    }
+
+    // A sticky piston drags the block beyond its head back into the head's space.
+    if sticky {
+        let pull = (head_pos.0 + dx, head_pos.1 + dy, head_pos.2 + dz);
+        let pb = world.get_block(pull.0, pull.1, pull.2);
+        if is_pushable(pb) {
+            world.set_block(head_pos.0, head_pos.1, head_pos.2, pb);
+            out.push((head_pos.0, head_pos.1, head_pos.2, pb));
+            world.set_block(pull.0, pull.1, pull.2, air);
+            out.push((pull.0, pull.1, pull.2, air));
+        }
+    }
+
+    let base = block::with_prop(state, "extended", 1);
+    world.set_block(x, y, z, base);
+    out.push((x, y, z, base));
 }
 
 /// 4-value facing direction `[north(-Z), south(+Z), west(-X), east(+X)]`.
@@ -704,6 +858,25 @@ mod tests {
         assert_eq!(block::prop_index(on, "powered"), Some(0));
         let d3 = block::with_prop(r, "delay", 3);
         assert_eq!(block::prop_index(d3, "delay"), Some(3));
+    }
+
+    #[test]
+    fn pistons_classified_and_pushability() {
+        assert!(is_piston("piston"));
+        assert!(is_piston("sticky_piston"));
+        assert!(is_redstone("piston"));
+        // 6-value facing maps to unit offsets in 3D.
+        assert_eq!(dir6(0), (0, -1, 0)); // down
+        assert_eq!(dir6(1), (0, 1, 0)); // up
+        assert_eq!(dir6(5), (1, 0, 0)); // east
+        // Ordinary blocks push; bedrock/obsidian/block-entities/air do not.
+        assert!(is_pushable(block::state_by_name("stone").unwrap()));
+        assert!(is_pushable(block::state_by_name("dirt").unwrap()));
+        assert!(!is_pushable(block::state_by_name("bedrock").unwrap()));
+        assert!(!is_pushable(block::state_by_name("obsidian").unwrap()));
+        assert!(!is_pushable(block::state_by_name("chest").unwrap()));
+        assert!(!is_pushable(block::state_by_name("air").unwrap()));
+        assert!(!is_pushable(block::state_by_name("piston").unwrap()));
     }
 
     #[test]
