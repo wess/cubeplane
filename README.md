@@ -70,6 +70,13 @@ workspace of focused crates that snap together.
 - **AI villagers (experimental)** — opt in (config or admin panel) to give
   villagers real LLM-driven personalities via Ollama, OpenAI or Claude:
   right-click a villager and it chats back in character for its profession.
+- **Crafting & smelting** — a recipe engine (`/craft` and the 2×2 grid) and
+  working furnaces (fuel + cook progress) drive real survival progression.
+- **Structures & dimensions** — surface huts and underground dungeons generate
+  in the overworld; `/dimension` travels to the Nether and the End.
+- **Survival depth** — falling sand/gravel, water+lava → stone/obsidian,
+  infinite water sources, animal breeding, weather, beds (spawn + skip night),
+  and a world border.
 - **Persistence backends** — `delta` (edits over the generator) or `region`
   (full chunk columns, Anvil-style); chests, signs, players, mobs, vehicles,
   dropped items and the world clock all persist, with a save on Ctrl-C.
