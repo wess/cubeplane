@@ -167,6 +167,8 @@ pub struct Mob {
     pub heading: f32,
     /// Cosmetic variant (e.g. sheep wool colour 0-15).
     pub variant: u8,
+    /// Whether a sheep has been sheared (no wool until it regrows).
+    pub sheared: bool,
     /// Whether this is a baby animal.
     pub baby: bool,
     /// Ticks until a baby grows into an adult (0 once grown).
@@ -197,6 +199,7 @@ impl Mob {
             on_ground: false,
             heading,
             variant: 0,
+            sheared: false,
             baby: false,
             baby_age: 0,
             in_love: 0,
@@ -213,7 +216,9 @@ impl Mob {
             m.push(crate::clientbound::Meta::Bool(16, true)); // ageable: is baby
         }
         if self.kind.name() == "sheep" {
-            m.push(crate::clientbound::Meta::Byte(17, (self.variant & 0x0f) as i8));
+            // Low nibble = wool colour; bit 0x10 = sheared.
+            let byte = (self.variant & 0x0f) | if self.sheared { 0x10 } else { 0 };
+            m.push(crate::clientbound::Meta::Byte(17, byte as i8));
         }
         m
     }

@@ -53,6 +53,7 @@ pub fn tick(shared: &Arc<Shared>, tick: u64, is_night: bool) {
     let mut lovers: Vec<(i32, MobKind, f64, f64, f64)> = Vec::new();
     let mut babies: Vec<(MobKind, f64, f64, f64)> = Vec::new();
     let mut grown: Vec<i32> = Vec::new();
+    let mut refresh_meta: Vec<i32> = Vec::new();
     {
         let mut guard = shared.mobs.write().unwrap();
         for mob in guard.values_mut() {
@@ -91,6 +92,11 @@ pub fn tick(shared: &Arc<Shared>, tick: u64, is_night: bool) {
             // Breeding cooldown ticks down; babies grow into adults.
             if mob.breed_cooldown > 0 {
                 mob.breed_cooldown -= 1;
+            }
+            // Sheared sheep slowly regrow their wool (as if grazing).
+            if mob.sheared && rand::thread_rng().gen_bool(0.002) {
+                mob.sheared = false;
+                refresh_meta.push(mob.entity_id);
             }
             if mob.baby && mob.baby_age > 0 {
                 mob.baby_age -= 1;
@@ -150,6 +156,12 @@ pub fn tick(shared: &Arc<Shared>, tick: u64, is_night: bool) {
     // is-baby flag (the regular metadata only emits it while true).
     for id in grown {
         shared.broadcast(cb::entity_metadata(id, &[cb::Meta::Bool(16, false)]));
+    }
+    // Sheep that regrew wool need their full (colour/sheared) metadata resent.
+    for id in refresh_meta {
+        if let Some(meta) = shared.with_mob(id, |m| m.metadata()) {
+            shared.broadcast(cb::entity_metadata(id, &meta));
+        }
     }
     if !remove.is_empty() {
         for id in &remove {

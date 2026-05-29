@@ -11,6 +11,8 @@ use tokio::net::TcpStream;
 use tokio::sync::mpsc::unbounded_channel;
 use tracing::{debug, info, warn};
 
+use rand::Rng;
+
 use cubeplane_mods::ModEvent;
 use cubeplane_protocol::{ProtoRead, ProtoWrite, RawPacket, PROTOCOL_VERSION};
 
@@ -864,6 +866,12 @@ fn respawn_player(
     broadcast_move(shared, player);
 }
 
+/// The 16 dye colours, indexed to match sheep wool variants and `*_wool` items.
+const WOOL_COLORS: [&str; 16] = [
+    "white", "orange", "magenta", "light_blue", "yellow", "lime", "pink", "gray", "light_gray",
+    "cyan", "purple", "blue", "brown", "green", "red", "black",
+];
+
 /// Right-click interaction with an entity: ride a vehicle, or trade with a
 /// villager.
 fn interact_entity(shared: &Arc<Shared>, player: &Player, target: i32) {
@@ -883,6 +891,37 @@ fn interact_entity(shared: &Arc<Shared>, player: &Player, target: i32) {
             start_conversation(shared, player, target);
         } else {
             open_merchant(shared, player, target, crate::ai::profession_for(target));
+        }
+        return;
+    }
+
+    // Shearing a sheep drops wool of its colour and leaves it sheared.
+    let held = player.inventory(|inv| inv.held(player.state().held_slot));
+    if item::name_of(held.id) == Some("shears") {
+        let shorn = shared
+            .with_mob(target, |m| {
+                if m.kind.name() == "sheep" && !m.sheared && !m.baby {
+                    m.sheared = true;
+                    Some((m.variant & 0x0f, m.x, m.y, m.z))
+                } else {
+                    None
+                }
+            })
+            .flatten();
+        if let Some((color, mx, my, mz)) = shorn {
+            let wool = format!("{}_wool", WOOL_COLORS[color as usize]);
+            if let Some(id) = item::id_any(&wool) {
+                let count = rand::thread_rng().gen_range(1..=3);
+                drops::spawn_item(shared, id, count, mx, my + 0.5, mz, 10);
+            }
+            if let Some(meta) = shared.with_mob(target, |m| m.metadata()) {
+                shared.broadcast(cb::entity_metadata(target, &meta));
+            }
+            shared.broadcast(cb::sound_effect("entity.sheep.shear", 6, mx, my, mz, 1.0, 1.0));
+            // Wear the shears in survival.
+            if player.gamemode() != 1 {
+                damage_held_tool(shared, player);
+            }
         }
         return;
     }
@@ -2024,6 +2063,16 @@ mod trade_tests {
     #[test]
     fn unknown_profession_falls_back() {
         assert!(!merchant_offers("nonsense").is_empty());
+    }
+
+    #[test]
+    fn wool_colors_resolve_for_every_variant() {
+        use super::WOOL_COLORS;
+        assert_eq!(WOOL_COLORS.len(), 16);
+        for color in WOOL_COLORS {
+            let wool = format!("{color}_wool");
+            assert!(crate::item::id_any(&wool).is_some(), "{wool} missing from registry");
+        }
     }
 }
 
