@@ -20,6 +20,20 @@ use crate::player::Player;
 /// Number of slots in a chest container.
 pub const CONTAINER_SIZE: usize = 27;
 
+/// A furnace block entity: input/fuel/output plus cook & burn timers.
+#[derive(Clone, Default)]
+pub struct Furnace {
+    pub input: ItemStack,
+    pub fuel: ItemStack,
+    pub output: ItemStack,
+    /// Cook progress in ticks (0..200).
+    pub cook: u32,
+    /// Remaining burn time of the current fuel unit.
+    pub burn: u32,
+    /// Burn time the current fuel unit started with.
+    pub burn_total: u32,
+}
+
 /// The personality and running conversation of an AI villager.
 pub struct VillagerBrain {
     pub profession: &'static str,
@@ -42,6 +56,8 @@ pub struct Shared {
     containers: RwLock<HashMap<(i32, i32, i32), Vec<ItemStack>>>,
     /// Sign text (4 lines) keyed by block position.
     signs: RwLock<HashMap<(i32, i32, i32), [String; 4]>>,
+    /// Furnace block entities keyed by block position.
+    pub(crate) furnaces: RwLock<HashMap<(i32, i32, i32), Furnace>>,
     /// Cells queued for fluid-flow evaluation.
     fluid_queue: Mutex<std::collections::VecDeque<(i32, i32, i32)>>,
     next_entity_id: AtomicI32,
@@ -76,6 +92,7 @@ impl Shared {
             vehicles: RwLock::new(HashMap::new()),
             containers: RwLock::new(HashMap::new()),
             signs: RwLock::new(HashMap::new()),
+            furnaces: RwLock::new(HashMap::new()),
             fluid_queue: Mutex::new(std::collections::VecDeque::new()),
             next_entity_id: AtomicI32::new(1),
             total_joins: AtomicU64::new(0),
@@ -198,6 +215,26 @@ impl Shared {
         let mut q = self.fluid_queue.lock().unwrap();
         let n = max.min(q.len());
         q.drain(..n).collect()
+    }
+
+    /// Ensure a furnace block entity exists at `pos`.
+    pub fn ensure_furnace(&self, pos: (i32, i32, i32)) {
+        self.furnaces.write().unwrap().entry(pos).or_default();
+    }
+
+    /// Mutate a furnace block entity.
+    pub fn with_furnace<R>(&self, pos: (i32, i32, i32), f: impl FnOnce(&mut Furnace) -> R) -> Option<R> {
+        self.furnaces.write().unwrap().get_mut(&pos).map(f)
+    }
+
+    /// Remove a furnace, returning its contents.
+    pub fn remove_furnace(&self, pos: (i32, i32, i32)) -> Option<Furnace> {
+        self.furnaces.write().unwrap().remove(&pos)
+    }
+
+    /// Positions of all furnaces (for the smelting tick).
+    pub fn furnace_positions(&self) -> Vec<(i32, i32, i32)> {
+        self.furnaces.read().unwrap().keys().copied().collect()
     }
 
     /// Store the text on a sign.

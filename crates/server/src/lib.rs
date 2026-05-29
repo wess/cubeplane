@@ -16,6 +16,7 @@ mod control;
 mod drops;
 mod encryption;
 mod entity;
+mod furnace;
 mod ids;
 mod inventory;
 mod item;
@@ -25,6 +26,7 @@ mod mobs_table;
 mod mod_actions;
 mod persistence;
 mod player;
+mod recipe;
 mod registry;
 mod serverbound;
 mod sim;
@@ -314,6 +316,10 @@ async fn game_loop(shared: Arc<Shared>) {
         // Fluid flow drains its queue frequently (cheap when idle).
         if ticks.is_multiple_of(5) {
             sim::fluid_tick(&shared);
+        }
+        // Furnaces smelt every other tick.
+        if ticks.is_multiple_of(2) {
+            furnace::tick(&shared);
         }
         // Random-tick growth and fire every ~2 seconds.
         if ticks.is_multiple_of(40) {

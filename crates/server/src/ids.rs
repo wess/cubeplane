@@ -48,6 +48,7 @@ pub mod play_cb {
     pub const DECLARE_COMMANDS: i32 = 0x10;
     pub const CLOSE_WINDOW: i32 = 0x11;
     pub const WINDOW_ITEMS: i32 = 0x12;
+    pub const WINDOW_PROPERTY: i32 = 0x15;
     pub const SET_SLOT: i32 = 0x14;
     pub const EXPLOSION: i32 = 0x1d;
     pub const WORLD_PARTICLES: i32 = 0x26;

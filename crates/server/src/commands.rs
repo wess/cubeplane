@@ -13,6 +13,7 @@ use crate::inventory::Inventory;
 use crate::item;
 use crate::mobs;
 use crate::player::Player;
+use crate::recipe;
 use crate::state::Shared;
 use crate::text;
 
@@ -33,7 +34,7 @@ pub fn dispatch(shared: &Arc<Shared>, player: &Player, name: &str, args: &[Strin
         "help" => {
             tell(
                 player,
-                "Commands: /help /list /pos /tp /xp · op: /gamemode /give /time /weather /summon /effect /heal /kill /clear",
+                "Commands: /help /list /pos /tp /xp /craft · op: /gamemode /give /time /weather /summon /effect /heal /kill /clear",
                 "aqua",
             );
         }
@@ -183,6 +184,43 @@ pub fn dispatch(shared: &Arc<Shared>, player: &Player, name: &str, args: &[Strin
             let amount: i32 = args.first().and_then(|a| a.parse().ok()).unwrap_or(10);
             combat::grant_xp(player, amount);
             tell(player, format!("Granted {amount} XP"), "green");
+        }
+        "craft" => {
+            // Recipe-book style: craft from inventory ingredients (no op needed).
+            let Some(target) = args.first() else {
+                tell(player, format!("usage: /craft <item> [count] — try: {}", recipe::craftable_names().join(", ")), "aqua");
+                return true;
+            };
+            let Some(r) = recipe::craftable(target) else {
+                tell(player, format!("No recipe for '{target}'."), "red");
+                return true;
+            };
+            let times: u32 = args.get(1).and_then(|c| c.parse().ok()).unwrap_or(1).clamp(1, 64);
+            let mut made = 0;
+            for _ in 0..times {
+                let ok = player.inventory(|inv| {
+                    if r.ingredients.iter().all(|(id, c)| inv.has(*id, *c)) {
+                        for (id, c) in &r.ingredients {
+                            inv.remove(*id, *c);
+                        }
+                        inv.add(r.output_id, r.output_count);
+                        true
+                    } else {
+                        false
+                    }
+                });
+                if ok {
+                    made += 1;
+                } else {
+                    break;
+                }
+            }
+            if made > 0 {
+                player.sync_inventory();
+                tell(player, format!("Crafted {made}× {target}."), "green");
+            } else {
+                tell(player, format!("You lack the ingredients for {target}."), "red");
+            }
         }
         _ => return false,
     }

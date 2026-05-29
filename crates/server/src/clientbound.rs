@@ -493,6 +493,15 @@ pub fn window_items(window_id: u8, state_id: i32, items: &[ItemStack], carried: 
     b
 }
 
+/// Set a window property (e.g. furnace progress/fuel arrows).
+pub fn window_property(window_id: u8, property: i16, value: i16) -> BytesMut {
+    let mut b = pkt(play_cb::WINDOW_PROPERTY);
+    b.write_u8(window_id);
+    b.write_i16(property);
+    b.write_i16(value);
+    b
+}
+
 /// Update a single inventory slot (Set Container Slot).
 pub fn set_slot(window_id: i8, state_id: i32, slot: i16, item: ItemStack) -> BytesMut {
     let mut b = pkt(play_cb::SET_SLOT);

@@ -32,7 +32,7 @@ pub struct ItemDef {
 }
 
 /// A stack of items. `count == 0` represents an empty slot (encoded as absent).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct ItemStack {
     pub id: i32,
     pub count: u8,

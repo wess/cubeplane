@@ -300,7 +300,7 @@ where
         ("help", false), ("list", false), ("pos", false), ("tp", true),
         ("gamemode", true), ("give", true), ("time", true), ("weather", true),
         ("summon", true), ("effect", true), ("heal", false), ("kill", false),
-        ("clear", false), ("xp", true), ("vehicle", true),
+        ("clear", false), ("xp", true), ("vehicle", true), ("craft", true),
     ]));
     player.send(cb::tab_list_header(
         &text::colored("cubeplane", "gold"),
@@ -485,6 +485,7 @@ async fn play_loop<R: AsyncRead + Unpin>(
                 // Interacting with a lever/chest/sign takes priority over placing.
                 if !try_toggle_lever(shared, x, y, z)
                     && !try_open_container(shared, player, x, y, z)
+                    && !try_open_furnace(shared, player, x, y, z)
                     && !try_read_sign(shared, player, x, y, z)
                 {
                     place_block(shared, player, x, y, z, face);
@@ -514,6 +515,7 @@ async fn play_loop<R: AsyncRead + Unpin>(
                 player.update(|s| {
                     s.open_container = None;
                     s.open_merchant = false;
+                    s.open_furnace = None;
                 });
             }
             Play::UseEntity { target, interaction } => {
@@ -950,6 +952,19 @@ fn try_toggle_lever(shared: &Arc<Shared>, x: i32, y: i32, z: i32) -> bool {
     true
 }
 
+/// Open the furnace screen if the player clicked a furnace. Returns true if so.
+fn try_open_furnace(shared: &Arc<Shared>, player: &Player, x: i32, y: i32, z: i32) -> bool {
+    let is_furnace = {
+        let mut w = shared.world.lock().unwrap();
+        cubeplane_world::block::info(w.get_block(x, y, z)).name == "furnace"
+    };
+    if !is_furnace {
+        return false;
+    }
+    crate::furnace::open(shared, player, (x, y, z));
+    true
+}
+
 /// Read (and re-open for editing) a sign the player clicked. Returns true if a
 /// sign was clicked.
 fn try_read_sign(shared: &Arc<Shared>, player: &Player, x: i32, y: i32, z: i32) -> bool {
@@ -1002,6 +1017,13 @@ fn apply_window_click(shared: &Arc<Shared>, player: &Player, window_id: u8, chan
     if player.state().open_merchant {
         return;
     }
+    // Furnace window routes to the furnace block entity.
+    if window_id != 0 {
+        if let Some(pos) = player.state().open_furnace {
+            crate::furnace::click(shared, player, pos, changed);
+            return;
+        }
+    }
     if window_id != 0 {
         if let Some(pos) = player.state().open_container {
             for (slot, stack) in changed {
@@ -1027,6 +1049,47 @@ fn apply_window_click(shared: &Arc<Shared>, player: &Player, window_id: u8, chan
             }
         }
     });
+    // The 2×2 crafting grid is inventory slots 1..=4, with the result in slot 0.
+    update_crafting_grid(player, changed.iter().any(|(s, _)| *s == 0));
+}
+
+/// Compute the result of the player's 2×2 crafting grid (inventory slots 1–4)
+/// into the output slot (0); when the output is taken, consume the grid.
+fn update_crafting_grid(player: &Player, took_output: bool) {
+    let grid: Vec<Option<i32>> = (1..=4)
+        .map(|s| {
+            let st = player.inventory(|i| i.get(s));
+            (!st.is_empty()).then_some(st.id)
+        })
+        .collect();
+
+    if took_output && crate::recipe::match_grid(&grid).is_some() {
+        // Consume one item from each occupied grid slot, then resync them.
+        for s in 1..=4 {
+            let mut st = player.inventory(|i| i.get(s));
+            if !st.is_empty() {
+                st.count -= 1;
+                if st.count == 0 {
+                    st = item::ItemStack::EMPTY;
+                }
+                player.inventory(|i| i.set(s, st));
+                player.send(cb::set_slot(0, 0, s as i16, st));
+            }
+        }
+    }
+
+    // Recompute the output slot from the (possibly consumed) grid.
+    let grid: Vec<Option<i32>> = (1..=4)
+        .map(|s| {
+            let st = player.inventory(|i| i.get(s));
+            (!st.is_empty()).then_some(st.id)
+        })
+        .collect();
+    let out = crate::recipe::match_grid(&grid)
+        .map(|r| item::ItemStack::new(r.output_id, r.output_count))
+        .unwrap_or(item::ItemStack::EMPTY);
+    player.inventory(|i| i.set(0, out));
+    player.send(cb::set_slot(0, 0, 0, out));
 }
 
 fn break_block(shared: &Arc<Shared>, player: &Player, x: i32, y: i32, z: i32, creative: bool) {
@@ -1058,6 +1121,16 @@ fn break_block(shared: &Arc<Shared>, player: &Player, x: i32, y: i32, z: i32, cr
     // Clean up a broken sign's stored text.
     if cubeplane_world::block::info(previous).name.ends_with("_sign") {
         shared.remove_sign((x, y, z));
+    }
+    // Breaking a furnace spills its contents.
+    if cubeplane_world::block::info(previous).name == "furnace" {
+        if let Some(f) = shared.remove_furnace((x, y, z)) {
+            for st in [f.input, f.fuel, f.output] {
+                if !st.is_empty() {
+                    drops::spawn_item(shared, st.id, st.count, x as f64 + 0.5, y as f64 + 0.5, z as f64 + 0.5, 10);
+                }
+            }
+        }
     }
     // Fluids can now flow into the gap; refresh redstone if it was a component.
     shared.schedule_fluid(x, y, z);
@@ -1105,6 +1178,10 @@ fn place_block(shared: &Arc<Shared>, player: &Player, x: i32, y: i32, z: i32, fa
     // Placing a sign opens its edit screen.
     if cubeplane_world::block::info(state).name.ends_with("_sign") {
         player.send(cb::open_sign_editor(px, py, pz));
+    }
+    // Placing a furnace creates its block entity.
+    if cubeplane_world::block::info(state).name == "furnace" {
+        shared.ensure_furnace((px, py, pz));
     }
     // Let fluids flow toward / from the change, and update redstone.
     shared.schedule_fluid(px, py, pz);
