@@ -506,6 +506,7 @@ async fn play_loop<R: AsyncRead + Unpin>(
             Play::BlockPlace { x, y, z, face, sequence } => {
                 // Interacting with a lever/chest/sign takes priority over placing.
                 if !try_flint(shared, player, x, y, z, face)
+                    && !try_bucket(shared, player, x, y, z, face)
                     && !try_bonemeal(shared, player, x, y, z)
                     && !try_toggle_lever(shared, player, x, y, z)
                     && !try_use_button(shared, player, x, y, z)
@@ -895,6 +896,27 @@ fn interact_entity(shared: &Arc<Shared>, player: &Player, target: i32) {
         return;
     }
 
+    // Milking a cow/mooshroom/goat with an empty bucket yields a milk bucket.
+    let slot = player.state().held_slot;
+    let held = player.inventory(|inv| inv.held(slot));
+    if item::name_of(held.id) == Some("bucket") {
+        let milkable = shared
+            .with_mob(target, |m| matches!(m.kind.name(), "cow" | "mooshroom" | "goat") && !m.baby)
+            .unwrap_or(false);
+        if milkable {
+            if player.gamemode() != 1 {
+                let after = player.inventory(|i| i.consume_held(slot));
+                player.set_slot(crate::inventory::HOTBAR_START + slot as usize, after);
+                if let Some(id) = item::id_any("milk_bucket") {
+                    player.give(id, 1);
+                }
+            }
+            let (mx, my, mz) = shared.with_mob(target, |m| (m.x, m.y, m.z)).unwrap_or((0.0, 0.0, 0.0));
+            shared.broadcast(cb::sound_effect("entity.cow.milk", 6, mx, my, mz, 1.0, 1.0));
+            return;
+        }
+    }
+
     // Shearing a sheep drops wool of its colour and leaves it sheared.
     let held = player.inventory(|inv| inv.held(player.state().held_slot));
     if item::name_of(held.id) == Some("shears") {
@@ -1201,6 +1223,85 @@ fn try_toggle_lever(shared: &Arc<Shared>, player: &Player, x: i32, y: i32, z: i3
         crate::sim::redstone_update(shared, x, y, z);
     }
     true
+}
+
+/// Pick up or place fluids with a bucket. Returns true if a bucket was used.
+fn try_bucket(shared: &Arc<Shared>, player: &Player, x: i32, y: i32, z: i32, face: i32) -> bool {
+    let slot = player.state().held_slot;
+    let held = player.inventory(|i| i.held(slot));
+    let dim = player.state().dimension;
+    match item::name_of(held.id) {
+        Some("bucket") => {
+            // Scoop up a source block the player clicked.
+            let state = { shared.dim_world(dim).lock().unwrap().get_block(x, y, z) };
+            let name = cubeplane_world::block::name_of(state);
+            let is_source = matches!(name, "water" | "lava")
+                && cubeplane_world::block::prop_index(state, "level") == Some(0);
+            if !is_source {
+                return false;
+            }
+            let filled = if name == "water" { "water_bucket" } else { "lava_bucket" };
+            {
+                let mut w = shared.dim_world(dim).lock().unwrap();
+                w.set_block(x, y, z, cubeplane_world::block::AIR);
+            }
+            shared.broadcast(cb::block_update(x, y, z, cubeplane_world::block::AIR));
+            if dim == 0 {
+                shared.schedule_fluid(x, y, z);
+            }
+            if player.gamemode() != 1 {
+                let after = player.inventory(|i| i.consume_held(slot));
+                player.set_slot(crate::inventory::HOTBAR_START + slot as usize, after);
+                if let Some(id) = item::id_any(filled) {
+                    player.give(id, 1);
+                }
+            }
+            true
+        }
+        Some(fluid_item @ ("water_bucket" | "lava_bucket")) => {
+            // Empty the bucket into the air block against the clicked face.
+            let (dx, dy, dz) = face_offset(face);
+            let (px, py, pz) = (x + dx, y + dy, z + dz);
+            let target = { shared.dim_world(dim).lock().unwrap().get_block(px, py, pz) };
+            if !cubeplane_world::block::is_air(target) {
+                return false;
+            }
+            let fluid = if fluid_item == "water_bucket" { "water" } else { "lava" };
+            let Some(source) = cubeplane_world::block::state_by_name(fluid) else {
+                return false;
+            };
+            {
+                let mut w = shared.dim_world(dim).lock().unwrap();
+                w.set_block(px, py, pz, source);
+            }
+            shared.broadcast(cb::block_update(px, py, pz, source));
+            if dim == 0 {
+                shared.schedule_fluid(px, py, pz);
+            }
+            if player.gamemode() != 1 {
+                let after = player.inventory(|i| i.consume_held(slot));
+                player.set_slot(crate::inventory::HOTBAR_START + slot as usize, after);
+                if let Some(id) = item::id_any("bucket") {
+                    player.give(id, 1);
+                }
+            }
+            true
+        }
+        _ => false,
+    }
+}
+
+/// Block offset for a clicked face (0=down … 5=east).
+fn face_offset(face: i32) -> (i32, i32, i32) {
+    match face {
+        0 => (0, -1, 0),
+        1 => (0, 1, 0),
+        2 => (0, 0, -1),
+        3 => (0, 0, 1),
+        4 => (-1, 0, 0),
+        5 => (1, 0, 0),
+        _ => (0, 1, 0),
+    }
 }
 
 /// Right-click a button to press it: power it now and schedule its release.
@@ -1933,6 +2034,23 @@ fn place_block(shared: &Arc<Shared>, player: &Player, x: i32, y: i32, z: i32, fa
 fn try_drink(shared: &Arc<Shared>, player: &Player) -> bool {
     let held_slot = player.state().held_slot;
     let held = player.inventory(|i| i.held(held_slot));
+    // Milk clears all active status effects and leaves an empty bucket.
+    if item::name_of(held.id) == Some("milk_bucket") {
+        for eff in shared.player_effects(player.entity_id) {
+            player.send(cb::remove_entity_effect(player.entity_id, eff.id));
+        }
+        shared.clear_effects(player.entity_id);
+        let s = player.state();
+        player.send(cb::sound_effect("entity.generic.drink", 7, s.x, s.y, s.z, 1.0, 1.0));
+        if player.gamemode() != 1 {
+            let after = player.inventory(|i| i.consume_held(held_slot));
+            player.set_slot(crate::inventory::HOTBAR_START + held_slot as usize, after);
+            if let Some(id) = item::id_any("bucket") {
+                player.give(id, 1);
+            }
+        }
+        return true;
+    }
     if item::name_of(held.id) != Some("potion") {
         return false;
     }
@@ -2063,6 +2181,21 @@ mod trade_tests {
     #[test]
     fn unknown_profession_falls_back() {
         assert!(!merchant_offers("nonsense").is_empty());
+    }
+
+    #[test]
+    fn bucket_items_and_fluids_resolve() {
+        for name in ["bucket", "water_bucket", "lava_bucket", "milk_bucket"] {
+            assert!(crate::item::id_any(name).is_some(), "{name} missing");
+        }
+        // Fluid source blocks exist with a level property (0 = source).
+        for fluid in ["water", "lava"] {
+            let s = cubeplane_world::block::state_by_name(fluid).unwrap();
+            assert!(cubeplane_world::block::prop_index(s, "level").is_some());
+        }
+        // Face offsets cover all six directions.
+        assert_eq!(super::face_offset(1), (0, 1, 0));
+        assert_eq!(super::face_offset(5), (1, 0, 0));
     }
 
     #[test]
