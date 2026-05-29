@@ -105,6 +105,12 @@ Collect Item (`0x67`), Entity Effect (`0x6c`), plus Tab List Header (`0x65`).
 Serverbound: Click Window (`0x0b`), Interact Entity (`0x10`), Set Creative Slot
 (`0x2b`) and Use Item (`0x32`).
 
+Later systems also use: Set Passengers (`0x59`), Merchant Offers (`0x2a`),
+Sound Effect (`0x62`, inline sound-event form), Open Sign Editor (`0x31`),
+Set Entity Metadata (`0x52`, including the Brigadier-style Commands graph at
+`0x10`). Serverbound additions: Vehicle Move (`0x18`), Steer Vehicle (`0x1f`),
+Select Trade (`0x26`), Update Sign (`0x2e`).
+
 ## Chunk format notes
 
 - Columns are 24 sections tall (`min_y = -64`, `height = 384`).

@@ -71,7 +71,12 @@ workspace of focused crates that snap together.
   villagers real LLM-driven personalities via Ollama, OpenAI or Claude:
   right-click a villager and it chats back in character for its profession.
 - **Persistence backends** — `delta` (edits over the generator) or `region`
-  (full chunk columns, Anvil-style).
+  (full chunk columns, Anvil-style); chests, signs, players, mobs, vehicles,
+  dropped items and the world clock all persist, with a save on Ctrl-C.
+- **Signs** — write on placement, read on click; text persists.
+- **Functional trading** — selecting a villager offer pays from your inventory.
+- **Liveness & anti-cheat** — dead connections time out; teleport/speed-hack
+  moves are snapped back and creative slot edits are creative-only.
 - **Commands** — `/help /list /pos /tp /xp` for everyone, plus op-gated
   `/gamemode /give /time /weather /summon /effect /heal /kill /clear`, with
   client-side tab-completion and any mod commands.
