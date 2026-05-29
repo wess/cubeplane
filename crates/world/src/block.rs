@@ -48,6 +48,8 @@ macro_rules! stringify_lower {
     (OAK_LEAVES) => { "oak_leaves" };
     (GLASS) => { "glass" };
     (LAPIS_BLOCK) => { "lapis_block" };
+    (CHEST) => { "chest" };
+    (CRAFTING_TABLE) => { "crafting_table" };
 }
 
 blocks! {
@@ -69,6 +71,8 @@ blocks! {
     OAK_LEAVES = 264,
     GLASS = 519,
     LAPIS_BLOCK = 522,
+    CHEST = 2955,
+    CRAFTING_TABLE = 4277,
 }
 
 /// Whether a state id is air (and therefore not counted toward a section's

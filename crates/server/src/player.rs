@@ -35,6 +35,8 @@ pub struct PlayerState {
     pub hurt_cooldown: u32,
     /// Current gamemode (0 survival, 1 creative, 2 adventure, 3 spectator).
     pub gamemode: i32,
+    /// Block position of the chest the player currently has open, if any.
+    pub open_container: Option<(i32, i32, i32)>,
 }
 
 /// Maximum player health, in half-hearts.
@@ -58,6 +60,7 @@ impl PlayerState {
             xp_total: 0,
             hurt_cooldown: 0,
             gamemode: 0,
+            open_container: None,
         }
     }
 

@@ -54,6 +54,8 @@ workspace of focused crates that snap together.
   XP) are saved to disk and restored across restarts.
 - **Building** — break and place blocks from your hotbar with proper
   block-change acknowledgement; survival breaks drop items.
+- **Chests** — place a chest, right-click to open a 27-slot container, store
+  items; contents persist and spill when the chest is broken.
 - **Commands** — `/help /list /pos /tp /xp` for everyone, plus op-gated
   `/gamemode /give /time /weather /summon /effect /heal /kill /clear`, with
   client-side tab-completion and any mod commands.

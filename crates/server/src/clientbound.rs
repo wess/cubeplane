@@ -429,6 +429,15 @@ pub fn play_disconnect(reason: &Json) -> BytesMut {
 // Inventory, items & entities
 // ---------------------------------------------------------------------------
 
+/// Open a container window. `inv_type` 2 = generic 9×3 (single chest).
+pub fn open_window(window_id: i32, inv_type: i32, title: &Json) -> BytesMut {
+    let mut b = pkt(play_cb::OPEN_WINDOW);
+    b.write_varint(window_id);
+    b.write_varint(inv_type);
+    b.write_string(&title.to_string());
+    b
+}
+
 /// Full inventory sync (Set Container Content).
 pub fn window_items(window_id: u8, state_id: i32, items: &[ItemStack], carried: ItemStack) -> BytesMut {
     let mut b = pkt(play_cb::WINDOW_ITEMS);

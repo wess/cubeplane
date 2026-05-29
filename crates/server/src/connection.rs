@@ -348,7 +348,10 @@ async fn play_loop(
                 player.send(cb::acknowledge_block_change(sequence));
             }
             Play::BlockPlace { x, y, z, face, sequence } => {
-                place_block(shared, player, x, y, z, face);
+                // Right-clicking a chest opens it; otherwise place the held block.
+                if !try_open_container(shared, player, x, y, z) {
+                    place_block(shared, player, x, y, z, face);
+                }
                 player.send(cb::acknowledge_block_change(sequence));
             }
             Play::UseItem => {
@@ -359,14 +362,11 @@ async fn play_loop(
                     player.inventory(|inv| inv.set(slot as usize, stack));
                 }
             }
-            Play::WindowClick { changed, .. } => {
-                player.inventory(|inv| {
-                    for (slot, stack) in &changed {
-                        if *slot >= 0 {
-                            inv.set(*slot as usize, *stack);
-                        }
-                    }
-                });
+            Play::WindowClick { window_id, changed } => {
+                apply_window_click(shared, player, window_id, &changed);
+            }
+            Play::CloseWindow => {
+                player.update(|s| s.open_container = None);
             }
             Play::UseEntity { target, interaction } => {
                 if interaction == 1 && !player.is_dead() {
@@ -558,6 +558,59 @@ fn respawn_player(
     broadcast_move(shared, player);
 }
 
+/// Open a chest the player clicked. Returns true if a container was opened.
+fn try_open_container(shared: &Arc<Shared>, player: &Player, x: i32, y: i32, z: i32) -> bool {
+    let is_chest = {
+        let mut w = shared.world.lock().unwrap();
+        w.get_block(x, y, z) == cubeplane_world::block::CHEST
+    };
+    if !is_chest {
+        return false;
+    }
+    let pos = (x, y, z);
+    shared.ensure_container(pos);
+    player.update(|s| s.open_container = Some(pos));
+
+    let container = shared.container_items(pos).unwrap_or_default();
+    let inv = player.inventory(|i| i.slots().to_vec());
+    let mut combined: Vec<item::ItemStack> = Vec::with_capacity(63);
+    combined.extend_from_slice(&container);
+    combined.extend_from_slice(&inv[9..45]); // player main + hotbar
+    player.send(cb::open_window(1, 2, &text::plain("Chest")));
+    player.send(cb::window_items(1, 0, &combined, item::ItemStack::EMPTY));
+    true
+}
+
+/// Apply a window click, routing chest-window slots to the open container.
+fn apply_window_click(shared: &Arc<Shared>, player: &Player, window_id: u8, changed: &[(i16, item::ItemStack)]) {
+    use crate::state::CONTAINER_SIZE;
+    if window_id != 0 {
+        if let Some(pos) = player.state().open_container {
+            for (slot, stack) in changed {
+                if *slot < 0 {
+                    continue;
+                }
+                let s = *slot as usize;
+                if s < CONTAINER_SIZE {
+                    shared.set_container_slot(pos, s, *stack);
+                } else {
+                    let inv_slot = s - CONTAINER_SIZE + 9;
+                    player.inventory(|i| i.set(inv_slot, *stack));
+                }
+            }
+            return;
+        }
+    }
+    // Player inventory window: slots are direct inventory indices.
+    player.inventory(|i| {
+        for (slot, stack) in changed {
+            if *slot >= 0 {
+                i.set(*slot as usize, *stack);
+            }
+        }
+    });
+}
+
 fn break_block(shared: &Arc<Shared>, player: &Player, x: i32, y: i32, z: i32, creative: bool) {
     let previous = {
         let mut world = shared.world.lock().unwrap();
@@ -566,6 +619,17 @@ fn break_block(shared: &Arc<Shared>, player: &Player, x: i32, y: i32, z: i32, cr
         prev
     };
     shared.broadcast(cb::block_update(x, y, z, cubeplane_world::block::AIR));
+
+    // Breaking a chest spills its contents and removes the block entity.
+    if previous == cubeplane_world::block::CHEST {
+        if let Some(items) = shared.remove_container((x, y, z)) {
+            for st in items {
+                if !st.is_empty() {
+                    drops::spawn_item(shared, st.id, st.count, x as f64 + 0.5, y as f64 + 0.5, z as f64 + 0.5, 10);
+                }
+            }
+        }
+    }
 
     // Survival breaks drop the block's item.
     if !creative {
@@ -604,6 +668,11 @@ fn place_block(shared: &Arc<Shared>, player: &Player, x: i32, y: i32, z: i32, fa
         world.set_block(px, py, pz, state);
     }
     shared.broadcast(cb::block_update(px, py, pz, state));
+
+    // Placing a chest creates its (empty) container block entity.
+    if state == cubeplane_world::block::CHEST {
+        shared.ensure_container((px, py, pz));
+    }
 
     // Survival consumes the placed item.
     if player.gamemode() != 1 {

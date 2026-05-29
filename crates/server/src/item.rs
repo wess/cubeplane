@@ -81,6 +81,8 @@ items! {
     110 => "oak_log", 64, Block(block::OAK_LOG);
     154 => "oak_leaves", 64, Block(block::OAK_LEAVES);
     166 => "glass", 64, Block(block::GLASS);
+    277 => "chest", 64, Block(block::CHEST);
+    278 => "crafting_table", 64, Block(block::CRAFTING_TABLE);
     // Food (hunger, saturation)
     759 => "apple", 64, Food(4, 2.4);
     815 => "bread", 64, Food(5, 6.0);

@@ -77,6 +77,24 @@ pub async fn run(config: Config) -> Result<()> {
 
     let shared = Shared::new(config, world, mods);
 
+    // Restore saved chest contents.
+    if shared.config.world.save {
+        let entries = persistence::load_containers(&save_dir);
+        if !entries.is_empty() {
+            let map = entries
+                .into_iter()
+                .map(|(pos, items)| {
+                    let stacks = items
+                        .into_iter()
+                        .map(|(id, count)| crate::item::ItemStack::new(id, count))
+                        .collect();
+                    (pos, stacks)
+                })
+                .collect();
+            shared.load_containers(map);
+        }
+    }
+
     shared.fire_mod(ModEvent::ServerStart {
         version: GAME_VERSION.to_string(),
     });
@@ -192,6 +210,18 @@ async fn save_loop(shared: Arc<Shared>, save_dir: std::path::PathBuf) {
         if let Err(e) = persistence::save_blocks(&save_dir, &edits) {
             error!("failed to save world: {e}");
         }
+
+        // Persist chest contents.
+        let entries: Vec<_> = shared
+            .containers_snapshot()
+            .into_iter()
+            .map(|(pos, stacks)| {
+                let items: Vec<(i32, u8)> = stacks.iter().map(|s| (s.id, s.count)).collect();
+                (pos, items)
+            })
+            .collect();
+        let _ = persistence::save_containers(&save_dir, &entries);
+
         for player in shared.players() {
             let _ = persistence::save_player(&save_dir, player.uuid, &player.snapshot_data());
         }

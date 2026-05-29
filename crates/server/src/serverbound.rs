@@ -54,7 +54,9 @@ pub enum Play {
     CreativeSlot { slot: i16, stack: ItemStack },
     /// A click in an inventory window. We trust the client-reported result
     /// slots, which keeps the model simple while supporting all click modes.
-    WindowClick { changed: Vec<(i16, ItemStack)>, cursor: ItemStack },
+    WindowClick { window_id: u8, changed: Vec<(i16, ItemStack)> },
+    /// The player closed an inventory window.
+    CloseWindow,
     /// A serverbound packet we recognise the id of but do not act on.
     Ignored,
 }
@@ -100,8 +102,9 @@ pub fn parse_play(mut raw: RawPacket) -> Result<Play> {
             let stack = read_slot(b)?;
             Play::CreativeSlot { slot, stack }
         }
+        play_sb::CLOSE_WINDOW => Play::CloseWindow,
         play_sb::WINDOW_CLICK => {
-            let _window = b.read_u8()?;
+            let window_id = b.read_u8()?;
             let _state = b.read_varint()?;
             let _slot = b.read_i16()?;
             let _button = b.read_i8()?;
@@ -113,8 +116,8 @@ pub fn parse_play(mut raw: RawPacket) -> Result<Play> {
                 let stack = read_slot(b)?;
                 changed.push((location, stack));
             }
-            let cursor = read_slot(b)?;
-            Play::WindowClick { changed, cursor }
+            let _cursor = read_slot(b)?;
+            Play::WindowClick { window_id, changed }
         }
         play_sb::USE_ENTITY => {
             let target = b.read_varint()?;

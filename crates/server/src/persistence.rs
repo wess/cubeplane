@@ -91,6 +91,28 @@ pub fn save_blocks(dir: &Path, edits: &HashMap<(i32, i32, i32), u16>) -> io::Res
     std::fs::rename(tmp, blocks_path(dir))
 }
 
+/// A container entry: position and 27 `(item id, count)` pairs.
+type ContainerEntry = ((i32, i32, i32), Vec<(i32, u8)>);
+
+fn containers_path(dir: &Path) -> PathBuf {
+    dir.join("containers.json")
+}
+
+/// Persist chest contents.
+pub fn save_containers(dir: &Path, entries: &[ContainerEntry]) -> io::Result<()> {
+    std::fs::create_dir_all(dir)?;
+    let json = serde_json::to_string(entries).map_err(io::Error::other)?;
+    std::fs::write(containers_path(dir), json)
+}
+
+/// Load chest contents (empty if absent).
+pub fn load_containers(dir: &Path) -> Vec<ContainerEntry> {
+    std::fs::read_to_string(containers_path(dir))
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or_default()
+}
+
 /// Load a player's saved data, if any.
 pub fn load_player(dir: &Path, uuid: Uuid) -> Option<PlayerData> {
     let text = std::fs::read_to_string(player_path(dir, uuid)).ok()?;

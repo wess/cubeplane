@@ -13,7 +13,11 @@ use cubeplane_world::World;
 
 use crate::config::Config;
 use crate::entity::{ItemEntity, Mob, Projectile};
+use crate::item::ItemStack;
 use crate::player::Player;
+
+/// Number of slots in a chest container.
+pub const CONTAINER_SIZE: usize = 27;
 
 /// Shared server state.
 pub struct Shared {
@@ -23,6 +27,8 @@ pub struct Shared {
     pub(crate) mobs: RwLock<HashMap<i32, Mob>>,
     pub(crate) items: RwLock<HashMap<i32, ItemEntity>>,
     pub(crate) projectiles: RwLock<HashMap<i32, Projectile>>,
+    /// Block-entity contents for chests, keyed by block position.
+    containers: RwLock<HashMap<(i32, i32, i32), Vec<ItemStack>>>,
     next_entity_id: AtomicI32,
     total_joins: AtomicU64,
     /// World time of day in ticks (0..24000), advanced by the game loop.
@@ -40,6 +46,7 @@ impl Shared {
             mobs: RwLock::new(HashMap::new()),
             items: RwLock::new(HashMap::new()),
             projectiles: RwLock::new(HashMap::new()),
+            containers: RwLock::new(HashMap::new()),
             next_entity_id: AtomicI32::new(1),
             total_joins: AtomicU64::new(0),
             world_time: std::sync::atomic::AtomicI64::new(1000),
@@ -107,6 +114,44 @@ impl Shared {
     /// Register a projectile.
     pub fn add_projectile(&self, proj: Projectile) {
         self.projectiles.write().unwrap().insert(proj.entity_id, proj);
+    }
+
+    /// Create an empty container at `pos` if none exists.
+    pub fn ensure_container(&self, pos: (i32, i32, i32)) {
+        self.containers
+            .write()
+            .unwrap()
+            .entry(pos)
+            .or_insert_with(|| vec![ItemStack::EMPTY; CONTAINER_SIZE]);
+    }
+
+    /// Snapshot a container's contents.
+    pub fn container_items(&self, pos: (i32, i32, i32)) -> Option<Vec<ItemStack>> {
+        self.containers.read().unwrap().get(&pos).cloned()
+    }
+
+    /// Set one slot of a container.
+    pub fn set_container_slot(&self, pos: (i32, i32, i32), idx: usize, stack: ItemStack) {
+        if let Some(c) = self.containers.write().unwrap().get_mut(&pos) {
+            if idx < c.len() {
+                c[idx] = stack;
+            }
+        }
+    }
+
+    /// Remove a container (e.g. when its chest is broken), returning contents.
+    pub fn remove_container(&self, pos: (i32, i32, i32)) -> Option<Vec<ItemStack>> {
+        self.containers.write().unwrap().remove(&pos)
+    }
+
+    /// All containers, for persistence.
+    pub fn containers_snapshot(&self) -> HashMap<(i32, i32, i32), Vec<ItemStack>> {
+        self.containers.read().unwrap().clone()
+    }
+
+    /// Replace all containers (used when loading from disk).
+    pub fn load_containers(&self, data: HashMap<(i32, i32, i32), Vec<ItemStack>>) {
+        *self.containers.write().unwrap() = data;
     }
 
     /// Look up a player by (case-insensitive) name.
