@@ -61,6 +61,14 @@ workspace of focused crates that snap together.
   block-change acknowledgement; survival breaks drop items.
 - **Chests** — place a chest, right-click to open a 27-slot container, store
   items; contents persist and spill when the chest is broken.
+- **World simulation** — crops grow, saplings become trees, grass spreads,
+  water and lava flow, fire spreads and burns out.
+- **Redstone** — wire carries power from blocks/torches/levers and lights
+  redstone lamps; flip a lever to switch a circuit.
+- **Vehicles** — spawn boats/minecarts, right-click to ride, jump to dismount.
+- **Villager trading** — right-click a villager to open a trade window.
+- **Persistence backends** — `delta` (edits over the generator) or `region`
+  (full chunk columns, Anvil-style).
 - **Commands** — `/help /list /pos /tp /xp` for everyone, plus op-gated
   `/gamemode /give /time /weather /summon /effect /heal /kill /clear`, with
   client-side tab-completion and any mod commands.
