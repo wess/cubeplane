@@ -313,12 +313,17 @@ pub fn tnt_tick(shared: &Arc<Shared>) {
 
 /// Whether a block participates in redstone (so we know when to recompute).
 pub fn is_redstone(name: &str) -> bool {
-    is_redstone_source(name) || is_actuator(name) || is_logic(name) || is_piston(name)
+    is_redstone_source(name) || is_actuator(name) || is_logic(name) || is_piston(name) || name == "observer"
 }
 
 /// A piston base block.
 fn is_piston(name: &str) -> bool {
     matches!(name, "piston" | "sticky_piston")
+}
+
+/// A block whose `powered` output we toggle on a delay (repeater/comparator/observer).
+fn is_scheduled_kind(name: &str) -> bool {
+    is_logic(name) || name == "observer"
 }
 
 /// A block that emits redstone power.
@@ -355,6 +360,7 @@ pub fn redstone_update(shared: &Arc<Shared>, ox: i32, oy: i32, oz: i32) {
     let mut actuators: Vec<(i32, i32, i32, u16)> = Vec::new();
     let mut repeaters: Vec<(i32, i32, i32, u16)> = Vec::new();
     let mut pistons: Vec<(i32, i32, i32, u16)> = Vec::new();
+    let mut observers: Vec<(i32, i32, i32, u16)> = Vec::new();
     let mut power: HashMap<(i32, i32, i32), u32> = HashMap::new();
     let mut queue: VecDeque<(i32, i32, i32, u32)> = VecDeque::new();
 
@@ -372,6 +378,8 @@ pub fn redstone_update(shared: &Arc<Shared>, ox: i32, oy: i32, oz: i32) {
                     repeaters.push((x, y, z, s));
                 } else if is_piston(name) {
                     pistons.push((x, y, z, s));
+                } else if name == "observer" {
+                    observers.push((x, y, z, s));
                 } else if name == "redstone_block" {
                     queue.push_back((x, y, z, 15));
                 } else if matches!(name, "redstone_torch" | "redstone_wall_torch") {
@@ -395,6 +403,17 @@ pub fn redstone_update(shared: &Arc<Shared>, ox: i32, oy: i32, oz: i32) {
                 let front = (x + dx, *y, z + dz);
                 power.insert(front, 15);
                 queue.push_back((front.0, front.1, front.2, 15));
+            }
+        }
+    }
+    // A pulsing observer injects power into the block behind it (opposite face).
+    for (x, y, z, s) in &observers {
+        if block::prop_index(*s, "powered") == Some(0) {
+            if let Some(facing) = block::prop_index(*s, "facing") {
+                let (dx, dy, dz) = dir6(facing);
+                let back = (x - dx, y - dy, z - dz);
+                power.insert(back, 15);
+                queue.push_back((back.0, back.1, back.2, 15));
             }
         }
     }
@@ -756,15 +775,57 @@ pub fn button_tick(shared: &Arc<Shared>) {
     }
 }
 
+/// Notify observers adjacent to a changed block: any observer whose face looks
+/// at `(cx, cy, cz)` emits a 2-tick redstone pulse from its back.
+pub fn notify_observers(shared: &Arc<Shared>, dim: u8, cx: i32, cy: i32, cz: i32) {
+    let mut trigger: Vec<(i32, i32, i32, u16)> = Vec::new();
+    {
+        let mut w = shared.dim_world(dim).lock().unwrap();
+        for (nx, ny, nz) in neighbors6(cx, cy, cz) {
+            let s = w.get_block(nx, ny, nz);
+            if block::name_of(s) != "observer" {
+                continue;
+            }
+            // Already pulsing? Don't re-trigger mid-pulse.
+            if block::prop_index(s, "powered") == Some(0) {
+                continue;
+            }
+            if let Some(f) = block::prop_index(s, "facing") {
+                let (dx, dy, dz) = dir6(f);
+                if (nx + dx, ny + dy, nz + dz) == (cx, cy, cz) {
+                    trigger.push((nx, ny, nz, s));
+                }
+            }
+        }
+    }
+    for (x, y, z, s) in trigger {
+        if shared.change_pending(dim, x, y, z) {
+            continue;
+        }
+        let on = block::with_prop(s, "powered", 0);
+        {
+            let mut w = shared.dim_world(dim).lock().unwrap();
+            w.set_block(x, y, z, on);
+        }
+        shared.broadcast(cb::block_update(x, y, z, on));
+        // Schedule the pulse to end after 2 game ticks.
+        let off = block::with_prop(s, "powered", 1);
+        shared.schedule_block(dim, x, y, z, off, 2);
+        if dim == 0 {
+            redstone_update(shared, x, y, z);
+        }
+    }
+}
+
 /// Apply delayed block changes (repeater/comparator outputs) that are now due,
 /// re-running a redstone update around each so the new signal propagates.
 pub fn scheduled_tick(shared: &Arc<Shared>) {
     for (dim, x, y, z, target) in shared.tick_scheduled() {
         let applied = {
             let mut w = shared.dim_world(dim).lock().unwrap();
-            // Only apply if the component is still there (it may have been mined).
+            // Only apply if the same component is still there (not mined/replaced).
             let cur = w.get_block(x, y, z);
-            if is_logic(block::name_of(cur)) {
+            if is_scheduled_kind(block::name_of(cur)) && block::name_of(cur) == block::name_of(target) {
                 w.set_block(x, y, z, target);
                 true
             } else {
@@ -858,6 +919,19 @@ mod tests {
         assert_eq!(block::prop_index(on, "powered"), Some(0));
         let d3 = block::with_prop(r, "delay", 3);
         assert_eq!(block::prop_index(d3, "delay"), Some(3));
+    }
+
+    #[test]
+    fn observers_are_redstone_and_scheduled() {
+        assert!(is_redstone("observer"));
+        assert!(is_scheduled_kind("observer"));
+        assert!(is_scheduled_kind("repeater"));
+        assert!(!is_scheduled_kind("redstone_wire"));
+        // Observers expose a togglable powered output and a 6-value facing.
+        let o = block::state_by_name("observer").unwrap();
+        let on = block::with_prop(o, "powered", 0);
+        assert_eq!(block::prop_index(on, "powered"), Some(0));
+        assert!(block::prop_index(o, "facing").is_some());
     }
 
     #[test]

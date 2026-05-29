@@ -1771,6 +1771,8 @@ fn break_block(shared: &Arc<Shared>, player: &Player, x: i32, y: i32, z: i32, cr
             crate::sim::redstone_update(shared, x, y, z);
         }
     }
+    // Observers watching this position fire on the break.
+    crate::sim::notify_observers(shared, dim, x, y, z);
     shared.fire_mod(ModEvent::BlockBreak {
         player: player.name.clone(),
         x,
@@ -1829,6 +1831,8 @@ fn place_block(shared: &Arc<Shared>, player: &Player, x: i32, y: i32, z: i32, fa
             crate::sim::redstone_update(shared, px, py, pz);
         }
     }
+    // Observers watching this position fire on the placement.
+    crate::sim::notify_observers(shared, dim, px, py, pz);
 
     // Survival consumes the placed item.
     if player.gamemode() != 1 {
