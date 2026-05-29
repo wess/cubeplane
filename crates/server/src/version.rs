@@ -709,9 +709,9 @@ mod tests {
         // whose payload parses as valid NBT.
         let out = chat_json_to_anonymous_nbt(r#"{"text":"hi","color":"red"}"#).unwrap();
         assert_eq!(out[0], 0x0a, "anonymous root compound tag");
-        // The converted payload is a valid NBT body (parseable by the converter).
-        let consumed = named_root_nbt_to_anonymous(&out, &mut Vec::new()).unwrap();
-        assert_eq!(consumed, out.len());
+        // The bytes after the tag form a complete, well-terminated compound body.
+        let body_len = compound_body_len(&out[1..]).unwrap();
+        assert_eq!(body_len, out.len() - 1);
         // Nested extra lists are handled.
         assert!(chat_json_to_anonymous_nbt(r#"{"text":"","extra":[{"text":"a"}]}"#).is_some());
     }
