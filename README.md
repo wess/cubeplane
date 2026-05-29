@@ -42,9 +42,9 @@ workspace of focused crates that snap together.
 - **Full block registry** — all 1003 1.20.1 blocks resolvable by name for
   `/setblock`, `/give` and mods, with correct light opacity/emission.
 - **Multiplayer** — players see each other move, chat, and build in real time.
-- **Mobs & AI** — zombies, skeletons, spiders, creepers, pigs, cows, sheep and
-  chickens spawn around players, wander with gravity, and hostile mobs chase
-  and attack.
+- **Mobs & AI** — all ~80 living entity types spawn around players (hostiles at
+  night), wander with gravity, and hostile mobs chase, melee, shoot arrows
+  (skeletons) or explode (creepers), dropping loot and XP.
 - **Combat & vitals** — health/food HUD, melee both ways (players hit mobs,
   mobs hit players), knockback, hurt and death animations, natural health
   regeneration.

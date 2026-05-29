@@ -55,7 +55,12 @@ the boundary — no lifetime gymnastics. See [MODDING.md](./MODDING.md).
 
 ### `cubeplane-server`
 The engine proper:
-- `codec`: async VarInt framing with zlib compression.
+- `encryption`: online-mode RSA keypair, Mojang auth hash, and stateful
+  AES-CFB8; `codec`'s `EncryptedReader`/`EncryptedWriter` wrap the stream.
+- `item` / `items_table`: curated item stats over the full 1255-item registry.
+- `commands`: built-in + op-gated slash commands (with a client command tree).
+- `persistence`: world block-edit delta, chest contents and per-player JSON.
+- `codec`: async VarInt framing with zlib compression (+ optional encryption).
 - `ids` / `clientbound` / `serverbound`: packet ids and (de)serializers.
 - `registry`: the dimension/biome/chat-type Login codec.
 - `connection`: the per-connection handshake → status/login → play lifecycle,
