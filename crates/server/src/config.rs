@@ -26,6 +26,9 @@ pub struct ServerConfig {
     pub compression_threshold: i32,
     /// "creative" or "survival".
     pub gamemode: String,
+    /// Operator player names allowed to run cheat commands. Empty = everyone
+    /// is an operator (convenient for local/demo use).
+    pub ops: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -34,6 +37,14 @@ pub struct WorldConfig {
     /// "terrain" or "flat".
     pub generator: String,
     pub seed: u64,
+    /// Persist block edits and player data to disk.
+    pub save: bool,
+    /// Directory for saved world/player data.
+    pub save_dir: String,
+    /// Keep a player's items when they die.
+    pub keep_inventory: bool,
+    /// Spawn hostile mobs (otherwise only passive animals appear).
+    pub spawn_hostiles: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -63,6 +74,7 @@ impl Default for ServerConfig {
             view_distance: 8,
             compression_threshold: 256,
             gamemode: "creative".into(),
+            ops: Vec::new(),
         }
     }
 }
@@ -72,6 +84,10 @@ impl Default for WorldConfig {
         WorldConfig {
             generator: "terrain".into(),
             seed: 0x5EED,
+            save: true,
+            save_dir: "world_data".into(),
+            keep_inventory: false,
+            spawn_hostiles: true,
         }
     }
 }

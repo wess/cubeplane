@@ -17,11 +17,14 @@ use cubeplane_protocol::{ProtoRead, RawPacket, PROTOCOL_VERSION};
 use crate::clientbound as cb;
 use crate::codec::{read_frame, write_frame, NO_COMPRESSION};
 use crate::combat;
+use crate::commands;
+use crate::drops;
+use crate::item;
 use crate::mobs;
 use crate::ids::{login_sb, status_sb};
 use crate::player::{offline_uuid, Player};
 use crate::serverbound::{self, Play};
-use crate::state::{hotbar_block, Shared};
+use crate::state::Shared;
 use crate::text;
 
 type Reader = BufReader<OwnedReadHalf>;
@@ -158,6 +161,18 @@ async fn play(
 
     let player = Player::new(entity_id, uuid, name.clone(), gamemode, tx, spawn);
 
+    // Restore saved player data (position, vitals, inventory, XP) if present.
+    let save_dir = std::path::PathBuf::from(&shared.config.world.save_dir);
+    if shared.config.world.save {
+        if let Some(data) = crate::persistence::load_player(&save_dir, uuid) {
+            player.apply_data(&data);
+        }
+    }
+    let spawn = {
+        let s = player.state();
+        (s.x, s.y, s.z)
+    };
+
     // --- Join sequence -------------------------------------------------------
     let is_flat = shared.world.lock().unwrap().generator_name() == "flat";
     player.send(cb::join_game(
@@ -173,7 +188,16 @@ async fn play(
     player.send(cb::set_held_item(0));
     player.send(cb::spawn_position(spawn.0 as i32, spawn.1 as i32, spawn.2 as i32, 0.0));
     player.send(cb::sync_position(spawn.0, spawn.1, spawn.2, 0.0, 0.0, 0, 0));
-    player.send(cb::update_health(20.0, 20, 5.0));
+    {
+        let s = player.state();
+        player.send(cb::update_health(s.health, s.food, s.saturation));
+        player.send(cb::set_experience(combat::xp_bar(s.xp_total), s.xp_total / 10, s.xp_total));
+    }
+    player.sync_inventory();
+    player.send(cb::tab_list_header(
+        &text::colored("cubeplane", "gold"),
+        &text::colored("Rust engine · JS mods", "gray"),
+    ));
     // "Start waiting for level chunks" so the client renders the world.
     player.send(cb::game_event(13, 0.0));
 
@@ -231,6 +255,9 @@ async fn play(
     let result = play_loop(&mut reader, &shared, &player, threshold, &mut loaded, &mut last_center).await;
 
     // --- Cleanup -------------------------------------------------------------
+    if shared.config.world.save {
+        let _ = crate::persistence::save_player(&save_dir, uuid, &player.snapshot_data());
+    }
     shared.remove_player(entity_id);
     shared.broadcast(cb::player_info_remove(&[uuid]));
     shared.broadcast(cb::remove_entities(&[entity_id]));
@@ -310,9 +337,9 @@ async fn play_loop(
                 handle_command(shared, player, &command);
             }
             Play::BlockDig { status, x, y, z, sequence } => {
-                let creative = player.gamemode == 1;
+                let creative = player.gamemode() == 1;
                 if status == 2 || (status == 0 && creative) {
-                    break_block(shared, player, x, y, z);
+                    break_block(shared, player, x, y, z, creative);
                 }
                 player.send(cb::acknowledge_block_change(sequence));
             }
@@ -320,9 +347,33 @@ async fn play_loop(
                 place_block(shared, player, x, y, z, face);
                 player.send(cb::acknowledge_block_change(sequence));
             }
+            Play::UseItem => {
+                try_eat(player);
+            }
+            Play::CreativeSlot { slot, stack } => {
+                if slot >= 0 {
+                    player.inventory(|inv| inv.set(slot as usize, stack));
+                }
+            }
+            Play::WindowClick { changed, .. } => {
+                player.inventory(|inv| {
+                    for (slot, stack) in &changed {
+                        if *slot >= 0 {
+                            inv.set(*slot as usize, *stack);
+                        }
+                    }
+                });
+            }
             Play::UseEntity { target, interaction } => {
                 if interaction == 1 && !player.is_dead() {
-                    mobs::player_attack(shared, player, target);
+                    let damage = match player.inventory(|inv| inv.held(player.state().held_slot)).def() {
+                        Some(d) => match d.kind {
+                            item::ItemKind::Weapon(dmg) => dmg,
+                            _ => 1.0,
+                        },
+                        None => 1.0,
+                    };
+                    mobs::player_attack(shared, player, target, damage);
                 }
             }
             Play::ClientCommand { action } => {
@@ -428,7 +479,7 @@ fn check_environment(shared: &Arc<Shared>, player: &Player) {
     }
 
     // Fall damage applies outside creative.
-    if player.gamemode == 1 {
+    if player.gamemode() == 1 {
         return;
     }
     if s.on_ground {
@@ -467,9 +518,10 @@ fn respawn_player(
         s.fall_peak_y = spawn.1;
     });
 
-    let gamemode = player.gamemode as u8;
+    let gamemode = player.gamemode() as u8;
     player.send(cb::respawn(gamemode, is_flat));
-    let abilities = if shared.config.is_creative() { 0x0D } else { 0x00 };
+    player.sync_inventory();
+    let abilities = if player.gamemode() == 1 { 0x0D } else { 0x00 };
     player.send(cb::player_abilities(abilities, 0.05, 0.1));
     player.send(cb::set_held_item(0));
     player.send(cb::spawn_position(spawn.0 as i32, spawn.1 as i32, spawn.2 as i32, 0.0));
@@ -502,12 +554,21 @@ fn respawn_player(
     broadcast_move(shared, player);
 }
 
-fn break_block(shared: &Arc<Shared>, player: &Player, x: i32, y: i32, z: i32) {
-    {
+fn break_block(shared: &Arc<Shared>, player: &Player, x: i32, y: i32, z: i32, creative: bool) {
+    let previous = {
         let mut world = shared.world.lock().unwrap();
+        let prev = world.get_block(x, y, z);
         world.set_block(x, y, z, cubeplane_world::block::AIR);
-    }
+        prev
+    };
     shared.broadcast(cb::block_update(x, y, z, cubeplane_world::block::AIR));
+
+    // Survival breaks drop the block's item.
+    if !creative {
+        if let Some(item_id) = item::item_for_block(previous) {
+            drops::spawn_item(shared, item_id, 1, x as f64 + 0.5, y as f64 + 0.25, z as f64 + 0.5, 10);
+        }
+    }
     shared.fire_mod(ModEvent::BlockBreak {
         player: player.name.clone(),
         x,
@@ -517,6 +578,13 @@ fn break_block(shared: &Arc<Shared>, player: &Player, x: i32, y: i32, z: i32) {
 }
 
 fn place_block(shared: &Arc<Shared>, player: &Player, x: i32, y: i32, z: i32, face: i32) {
+    let held = player.state().held_slot;
+    let stack = player.inventory(|inv| inv.held(held));
+    // Only place if the held item maps to a block.
+    let Some(state) = item::block_for_item(stack.id) else {
+        return;
+    };
+
     let (dx, dy, dz) = match face {
         0 => (0, -1, 0),
         1 => (0, 1, 0),
@@ -527,19 +595,59 @@ fn place_block(shared: &Arc<Shared>, player: &Player, x: i32, y: i32, z: i32, fa
         _ => (0, 1, 0),
     };
     let (px, py, pz) = (x + dx, y + dy, z + dz);
-    let (block_name, state) = hotbar_block(player.state().held_slot);
     {
         let mut world = shared.world.lock().unwrap();
         world.set_block(px, py, pz, state);
     }
     shared.broadcast(cb::block_update(px, py, pz, state));
+
+    // Survival consumes the placed item.
+    if player.gamemode() != 1 {
+        let slot = crate::inventory::HOTBAR_START + held as usize;
+        let after = player.inventory(|inv| inv.consume_held(held));
+        player.send(cb::set_slot(0, 0, slot as i16, after));
+    }
+
+    let block_name = cubeplane_world::block::by_name; // for the mod event name
+    let name = item::def(stack.id).map(|d| d.name).unwrap_or("block");
+    let _ = block_name;
     shared.fire_mod(ModEvent::BlockPlace {
         player: player.name.clone(),
         x: px,
         y: py,
         z: pz,
-        block: block_name.to_string(),
+        block: name.to_string(),
     });
+}
+
+/// Eat the held food item if the player is hungry.
+fn try_eat(player: &Player) {
+    let held = player.state().held_slot;
+    let stack = player.inventory(|inv| inv.held(held));
+    let Some((hunger, sat)) = stack.def().and_then(|d| match d.kind {
+        item::ItemKind::Food(h, s) => Some((h, s)),
+        _ => None,
+    }) else {
+        return;
+    };
+
+    let needs_food = player.state().food < 20;
+    if !needs_food && player.gamemode() != 1 {
+        return;
+    }
+
+    // Restore hunger/saturation and consume one item (survival).
+    let (health, food, saturation) = player.update(|s| {
+        s.food = (s.food + hunger).min(20);
+        s.saturation = (s.saturation + sat).min(s.food as f32);
+        (s.health, s.food, s.saturation)
+    });
+    player.send(cb::update_health(health, food, saturation));
+    if player.gamemode() != 1 {
+        let slot = crate::inventory::HOTBAR_START + held as usize;
+        let after = player.inventory(|inv| inv.consume_held(held));
+        player.send(cb::set_slot(0, 0, slot as i16, after));
+    }
 }
 
 fn handle_chat(shared: &Arc<Shared>, player: &Player, message: &str) {
@@ -557,53 +665,12 @@ fn handle_command(shared: &Arc<Shared>, player: &Player, command: &str) {
     let name = parts.next().unwrap_or("").to_lowercase();
     let args: Vec<String> = parts.map(str::to_string).collect();
 
-    match name.as_str() {
-        "help" => {
-            let msg = text::colored(
-                "Commands: /help /list /pos /tp <x> <y> <z> — plus any mod commands",
-                "aqua",
-            );
-            player.send(cb::system_chat(&msg, false));
-        }
-        "list" => {
-            let names: Vec<String> = shared.players().iter().map(|p| p.name.clone()).collect();
-            let msg = text::colored(
-                format!("{} online: {}", names.len(), names.join(", ")),
-                "aqua",
-            );
-            player.send(cb::system_chat(&msg, false));
-        }
-        "pos" => {
-            let s = player.state();
-            let msg = text::colored(
-                format!("x={:.1} y={:.1} z={:.1}", s.x, s.y, s.z),
-                "aqua",
-            );
-            player.send(cb::system_chat(&msg, false));
-        }
-        "tp" => {
-            if let [x, y, z] = args.as_slice() {
-                if let (Ok(x), Ok(y), Ok(z)) = (x.parse(), y.parse(), z.parse()) {
-                    player.update(|s| {
-                        s.x = x;
-                        s.y = y;
-                        s.z = z;
-                    });
-                    player.send(cb::sync_position(x, y, z, 0.0, 0.0, 0, 0));
-                    broadcast_move(shared, player);
-                    return;
-                }
-            }
-            let msg = text::colored("usage: /tp <x> <y> <z>", "red");
-            player.send(cb::system_chat(&msg, false));
-        }
-        _ => {
-            // Defer to the mod runtime for any non-built-in command.
-            shared.fire_mod(ModEvent::Command {
-                player: player.name.clone(),
-                command: name,
-                args,
-            });
-        }
+    // Built-in commands first; unhandled ones go to the mod runtime.
+    if !commands::dispatch(shared, player, &name, &args) {
+        shared.fire_mod(ModEvent::Command {
+            player: player.name.clone(),
+            command: name,
+            args,
+        });
     }
 }

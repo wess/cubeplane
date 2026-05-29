@@ -1,10 +1,12 @@
 //! Per-player state and the handle other tasks use to reach a player.
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use bytes::BytesMut;
 use tokio::sync::mpsc::UnboundedSender;
 use uuid::Uuid;
+
+use crate::inventory::Inventory;
 
 /// A mutable snapshot of where a player is, their vitals and what they hold.
 #[derive(Debug, Clone, Copy)]
@@ -27,6 +29,12 @@ pub struct PlayerState {
     pub dead: bool,
     /// Highest Y reached since last touching the ground, for fall damage.
     pub fall_peak_y: f64,
+    /// Total accumulated experience points.
+    pub xp_total: i32,
+    /// Ticks remaining before the next contact-damage tick can apply.
+    pub hurt_cooldown: u32,
+    /// Current gamemode (0 survival, 1 creative, 2 adventure, 3 spectator).
+    pub gamemode: i32,
 }
 
 /// Maximum player health, in half-hearts.
@@ -47,6 +55,9 @@ impl PlayerState {
             saturation: 5.0,
             dead: false,
             fall_peak_y: y,
+            xp_total: 0,
+            hurt_cooldown: 0,
+            gamemode: 0,
         }
     }
 
@@ -68,7 +79,8 @@ pub struct Player {
     pub name: String,
     pub gamemode: i32,
     pub sender: UnboundedSender<BytesMut>,
-    state: std::sync::Arc<Mutex<PlayerState>>,
+    state: Arc<Mutex<PlayerState>>,
+    inventory: Arc<Mutex<Inventory>>,
 }
 
 impl Player {
@@ -80,14 +92,28 @@ impl Player {
         sender: UnboundedSender<BytesMut>,
         spawn: (f64, f64, f64),
     ) -> Self {
+        let mut st = PlayerState::new(spawn.0, spawn.1, spawn.2);
+        st.gamemode = gamemode;
         Player {
             entity_id,
             uuid,
             name,
             gamemode,
             sender,
-            state: std::sync::Arc::new(Mutex::new(PlayerState::new(spawn.0, spawn.1, spawn.2))),
+            state: Arc::new(Mutex::new(st)),
+            inventory: Arc::new(Mutex::new(Inventory::default())),
         }
+    }
+
+    /// The player's current gamemode (authoritative; may change at runtime).
+    pub fn gamemode(&self) -> i32 {
+        self.state().gamemode
+    }
+
+    /// Mutate the inventory under its lock.
+    pub fn inventory<R>(&self, f: impl FnOnce(&mut Inventory) -> R) -> R {
+        let mut guard = self.inventory.lock().unwrap();
+        f(&mut guard)
     }
 
     /// Read the current player state.
@@ -109,6 +135,70 @@ impl Player {
     /// Whether the player is currently dead (awaiting respawn).
     pub fn is_dead(&self) -> bool {
         self.state().dead
+    }
+
+    /// Send the player their full inventory (Set Container Content).
+    pub fn sync_inventory(&self) {
+        let stacks = self.inventory(|inv| inv.slots().to_vec());
+        self.send(crate::clientbound::window_items(0, 0, &stacks, crate::item::ItemStack::EMPTY));
+    }
+
+    /// Set one inventory slot and push the update to the client.
+    pub fn set_slot(&self, slot: usize, stack: crate::item::ItemStack) {
+        self.inventory(|inv| inv.set(slot, stack));
+        self.send(crate::clientbound::set_slot(0, 0, slot as i16, stack));
+    }
+
+    /// Give the player items, syncing the result.
+    pub fn give(&self, id: i32, count: u8) {
+        self.inventory(|inv| inv.add(id, count));
+        self.sync_inventory();
+    }
+
+    /// Capture this player's persistable state.
+    pub fn snapshot_data(&self) -> crate::persistence::PlayerData {
+        let s = self.state();
+        let items = self.inventory(|inv| {
+            inv.slots()
+                .iter()
+                .enumerate()
+                .filter(|(_, st)| !st.is_empty())
+                .map(|(i, st)| (i as u16, st.id, st.count))
+                .collect()
+        });
+        crate::persistence::PlayerData {
+            x: s.x,
+            y: s.y,
+            z: s.z,
+            yaw: s.yaw,
+            pitch: s.pitch,
+            health: s.health,
+            food: s.food,
+            saturation: s.saturation,
+            xp_total: s.xp_total,
+            items,
+        }
+    }
+
+    /// Restore saved state into this player (before the join packets are sent).
+    pub fn apply_data(&self, d: &crate::persistence::PlayerData) {
+        self.update(|s| {
+            s.x = d.x;
+            s.y = d.y;
+            s.z = d.z;
+            s.yaw = d.yaw;
+            s.pitch = d.pitch;
+            s.health = d.health;
+            s.food = d.food;
+            s.saturation = d.saturation;
+            s.fall_peak_y = d.y;
+            s.xp_total = d.xp_total;
+        });
+        self.inventory(|inv| {
+            for (slot, id, count) in &d.items {
+                inv.set(*slot as usize, crate::item::ItemStack::new(*id, *count));
+            }
+        });
     }
 }
 

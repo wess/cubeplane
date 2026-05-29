@@ -4,9 +4,26 @@
 //! metadata (signatures, acknowledgement bitsets) is intentionally ignored
 //! because cubeplane runs in unsigned/offline mode.
 
+use bytes::Buf;
+
 use cubeplane_protocol::{ProtoRead, RawPacket, Result};
 
 use crate::ids::play_sb;
+use crate::item::ItemStack;
+
+/// Read an item stack in the `slot` wire format, consuming any trailing NBT.
+fn read_slot<B: Buf>(b: &mut B) -> Result<ItemStack> {
+    if !b.read_bool()? {
+        return Ok(ItemStack::EMPTY);
+    }
+    let id = b.read_varint()?;
+    let count = b.read_i8()? as u8;
+    // optionalNbt: a lone 0x00 (TAG_End) means none; otherwise a named
+    // compound. `Nbt::from_bytes` consumes exactly the right bytes in both
+    // cases (it reads the type byte and, for non-compound, stops).
+    let _ = cubeplane_nbt::Nbt::from_bytes(b);
+    Ok(ItemStack::new(id, count))
+}
 
 /// A decoded, actionable serverbound play packet. Some fields are parsed for
 /// completeness/documentation even where the engine does not yet act on them.
@@ -31,6 +48,13 @@ pub enum Play {
     ClientCommand { action: i32 },
     /// Interact with an entity. `interaction` 0 = interact, 1 = attack.
     UseEntity { target: i32, interaction: i32 },
+    /// Right-click / use the held item (e.g. eating food).
+    UseItem,
+    /// Creative-mode direct slot edit.
+    CreativeSlot { slot: i16, stack: ItemStack },
+    /// A click in an inventory window. We trust the client-reported result
+    /// slots, which keeps the model simple while supporting all click modes.
+    WindowClick { changed: Vec<(i16, ItemStack)>, cursor: ItemStack },
     /// A serverbound packet we recognise the id of but do not act on.
     Ignored,
 }
@@ -70,6 +94,28 @@ pub fn parse_play(mut raw: RawPacket) -> Result<Play> {
         play_sb::HELD_ITEM_SLOT => Play::HeldItem { slot: b.read_i16()? },
         play_sb::ARM_ANIMATION => Play::Animation { hand: b.read_varint()? },
         play_sb::CLIENT_COMMAND => Play::ClientCommand { action: b.read_varint()? },
+        play_sb::USE_ITEM => Play::UseItem,
+        play_sb::SET_CREATIVE_SLOT => {
+            let slot = b.read_i16()?;
+            let stack = read_slot(b)?;
+            Play::CreativeSlot { slot, stack }
+        }
+        play_sb::WINDOW_CLICK => {
+            let _window = b.read_u8()?;
+            let _state = b.read_varint()?;
+            let _slot = b.read_i16()?;
+            let _button = b.read_i8()?;
+            let _mode = b.read_varint()?;
+            let n = b.read_varint()? as usize;
+            let mut changed = Vec::with_capacity(n.min(64));
+            for _ in 0..n {
+                let location = b.read_i16()?;
+                let stack = read_slot(b)?;
+                changed.push((location, stack));
+            }
+            let cursor = read_slot(b)?;
+            Play::WindowClick { changed, cursor }
+        }
         play_sb::USE_ENTITY => {
             let target = b.read_varint()?;
             let interaction = b.read_varint()?;

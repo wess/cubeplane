@@ -7,6 +7,11 @@
 
 use uuid::Uuid;
 
+/// Entity type id for a dropped item.
+pub const ITEM_ENTITY: i32 = 54;
+/// Entity type id for an arrow.
+pub const ARROW: i32 = 3;
+
 /// A kind of mob with its registry id and gameplay stats.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MobKind {
@@ -109,6 +114,39 @@ impl MobKind {
     pub fn from_name(name: &str) -> Option<MobKind> {
         MobKind::ALL.into_iter().find(|k| k.name() == name)
     }
+}
+
+/// A dropped item lying in the world, awaiting pickup.
+#[derive(Debug, Clone)]
+pub struct ItemEntity {
+    pub entity_id: i32,
+    pub uuid: Uuid,
+    pub item_id: i32,
+    pub count: u8,
+    pub x: f64,
+    pub y: f64,
+    pub z: f64,
+    pub on_ground: bool,
+    /// Ticks alive (despawns after a while).
+    pub age: u32,
+    /// Ticks before it can be picked up.
+    pub pickup_delay: u32,
+}
+
+/// A flying projectile (currently only skeleton arrows).
+#[derive(Debug, Clone)]
+pub struct Projectile {
+    pub entity_id: i32,
+    pub x: f64,
+    pub y: f64,
+    pub z: f64,
+    pub vx: f64,
+    pub vy: f64,
+    pub vz: f64,
+    pub damage: f32,
+    pub age: u32,
+    /// Entity id of the mob that fired it (so it can't hit its owner).
+    pub owner: i32,
 }
 
 /// A live mob in the world.

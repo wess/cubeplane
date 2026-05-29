@@ -19,6 +19,10 @@ pub use gen::{FlatGenerator, Generator, TerrainGenerator};
 pub struct World {
     generator: Arc<dyn Generator>,
     chunks: HashMap<(i32, i32), Chunk>,
+    /// Player/mod block edits over the generator, persisted to disk. Applied to
+    /// chunks as they are (re)generated so the world survives reloads and chunk
+    /// unloading.
+    edits: HashMap<(i32, i32, i32), StateId>,
     spawn: (f64, f64, f64),
 }
 
@@ -30,8 +34,37 @@ impl World {
         World {
             generator,
             chunks: HashMap::new(),
+            edits: HashMap::new(),
             spawn: (0.5, spawn_y, 0.5),
         }
+    }
+
+    /// Seed the world with previously-saved block edits (call before serving).
+    pub fn load_edits(&mut self, edits: HashMap<(i32, i32, i32), StateId>) {
+        self.edits = edits;
+    }
+
+    /// The persisted block edits, for saving.
+    pub fn edits(&self) -> &HashMap<(i32, i32, i32), StateId> {
+        &self.edits
+    }
+
+    /// Generate a chunk and overlay any saved edits that fall within it.
+    fn generate_chunk(&self, cx: i32, cz: i32) -> Chunk {
+        let mut chunk = self.generator.generate(cx, cz);
+        if !self.edits.is_empty() {
+            for (&(x, y, z), &state) in &self.edits {
+                if x.div_euclid(16) == cx && z.div_euclid(16) == cz {
+                    chunk.set_block(x.rem_euclid(16) as usize, y, z.rem_euclid(16) as usize, state);
+                }
+            }
+        }
+        chunk
+    }
+
+    /// Unload a chunk from memory (its edits persist in the edit map).
+    pub fn unload_chunk(&mut self, cx: i32, cz: i32) -> bool {
+        self.chunks.remove(&(cx, cz)).is_some()
     }
 
     /// The world spawn point `(x, y, z)`.
@@ -51,9 +84,11 @@ impl World {
 
     /// Get a chunk, generating and caching it if not yet loaded.
     pub fn chunk(&mut self, cx: i32, cz: i32) -> &Chunk {
-        self.chunks
-            .entry((cx, cz))
-            .or_insert_with(|| self.generator.generate(cx, cz))
+        if !self.chunks.contains_key(&(cx, cz)) {
+            let chunk = self.generate_chunk(cx, cz);
+            self.chunks.insert((cx, cz), chunk);
+        }
+        self.chunks.get(&(cx, cz)).unwrap()
     }
 
     /// Whether a chunk is already generated/loaded.
@@ -68,14 +103,15 @@ impl World {
     }
 
     /// Place a block at world coordinates, generating the chunk if needed.
-    /// Returns the chunk coordinates affected so the caller can resend it.
+    /// Records the edit for persistence and returns the affected chunk coords.
     pub fn set_block(&mut self, x: i32, y: i32, z: i32, state: StateId) -> (i32, i32) {
         let (cx, cz, lx, lz) = world_to_chunk(x, z);
-        let chunk = self
-            .chunks
-            .entry((cx, cz))
-            .or_insert_with(|| self.generator.generate(cx, cz));
-        chunk.set_block(lx, y, lz, state);
+        if !self.chunks.contains_key(&(cx, cz)) {
+            let chunk = self.generate_chunk(cx, cz);
+            self.chunks.insert((cx, cz), chunk);
+        }
+        self.chunks.get_mut(&(cx, cz)).unwrap().set_block(lx, y, lz, state);
+        self.edits.insert((x, y, z), state);
         (cx, cz)
     }
 }

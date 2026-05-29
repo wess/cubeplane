@@ -18,6 +18,10 @@ pub fn damage_player(shared: &Arc<Shared>, player: &Player, amount: f32, cause: 
         return;
     }
 
+    // Armor reduces incoming damage by 4% per point (capped at 80%).
+    let defense = player.inventory(|inv| inv.armor_defense());
+    let amount = amount * (1.0 - (defense * 0.04).min(0.8));
+
     let (new_health, food, saturation, just_died) = player.update(|s| {
         if s.dead {
             return (s.health, s.food, s.saturation, false);
@@ -45,7 +49,40 @@ pub fn damage_player(shared: &Arc<Shared>, player: &Player, amount: f32, cause: 
         let msg = text::plain(format!("{} {}", player.name, cause));
         player.send(cb::death_combat_event(player.entity_id, &msg));
         shared.broadcast(cb::system_chat(&text::colored(format!("{} {}", player.name, cause), "red"), false));
+
+        // Drop the player's items unless keepInventory is enabled.
+        if !shared.config.world.keep_inventory {
+            let s = player.state();
+            let dropped: Vec<(i32, u8)> = player.inventory(|inv| {
+                let list = inv
+                    .slots()
+                    .iter()
+                    .filter(|st| !st.is_empty())
+                    .map(|st| (st.id, st.count))
+                    .collect();
+                *inv = crate::inventory::Inventory::default();
+                list
+            });
+            for (id, count) in dropped {
+                crate::drops::spawn_item(shared, id, count, s.x, s.y + 0.5, s.z, 20);
+            }
+            player.sync_inventory();
+        }
     }
+}
+
+/// Grant experience and update the XP HUD. Levels use a simple linear curve.
+pub fn grant_xp(player: &Player, amount: i32) {
+    let total = player.update(|s| {
+        s.xp_total = (s.xp_total + amount).max(0);
+        s.xp_total
+    });
+    player.send(cb::set_experience(xp_bar(total), total / 10, total));
+}
+
+/// Fraction of the way to the next level for a given total (0.0..1.0).
+pub fn xp_bar(total: i32) -> f32 {
+    (total % 10) as f32 / 10.0
 }
 
 /// Reset a player to full health (used on respawn).

@@ -39,7 +39,21 @@ pub mod login_sb {
 /// Play, clientbound.
 pub mod play_cb {
     pub const SPAWN_ENTITY: i32 = 0x01;
+    pub const SPAWN_XP_ORB: i32 = 0x02;
     pub const SPAWN_PLAYER: i32 = 0x03;
+    pub const CLOSE_WINDOW: i32 = 0x11;
+    pub const WINDOW_ITEMS: i32 = 0x12;
+    pub const SET_SLOT: i32 = 0x14;
+    pub const EXPLOSION: i32 = 0x1d;
+    pub const WORLD_PARTICLES: i32 = 0x26;
+    pub const OPEN_WINDOW: i32 = 0x30;
+    pub const SET_ACTION_BAR: i32 = 0x46;
+    pub const ENTITY_METADATA: i32 = 0x52;
+    pub const SET_EXPERIENCE: i32 = 0x56;
+    pub const SOUND_EFFECT: i32 = 0x62;
+    pub const TAB_LIST_HEADER: i32 = 0x65;
+    pub const COLLECT: i32 = 0x67;
+    pub const ENTITY_EFFECT: i32 = 0x6c;
     pub const ACKNOWLEDGE_BLOCK_CHANGE: i32 = 0x06;
     pub const BLOCK_UPDATE: i32 = 0x0a;
     pub const DAMAGE_EVENT: i32 = 0x18;
@@ -87,6 +101,9 @@ pub mod play_sb {
     pub const FLYING: i32 = 0x17;
     pub const HELD_ITEM_SLOT: i32 = 0x28;
     pub const USE_ENTITY: i32 = 0x10;
+    pub const WINDOW_CLICK: i32 = 0x0b;
+    pub const CLOSE_WINDOW: i32 = 0x0c;
+    pub const SET_CREATIVE_SLOT: i32 = 0x2b;
     pub const BLOCK_DIG: i32 = 0x1d;
     pub const ARM_ANIMATION: i32 = 0x2f;
     pub const BLOCK_PLACE: i32 = 0x31;

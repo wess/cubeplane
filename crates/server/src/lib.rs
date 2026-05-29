@@ -8,13 +8,18 @@
 mod clientbound;
 mod codec;
 mod combat;
+mod commands;
 mod config;
 mod connection;
 mod control;
+mod drops;
 mod entity;
 mod ids;
+mod inventory;
+mod item;
 mod mobs;
 mod mod_actions;
+mod persistence;
 mod player;
 mod registry;
 mod serverbound;
@@ -49,7 +54,17 @@ fn make_generator(config: &Config) -> Arc<dyn Generator> {
 /// Boot the server with the given configuration and run until the process is
 /// terminated.
 pub async fn run(config: Config) -> Result<()> {
-    let world = World::new(make_generator(&config));
+    let mut world = World::new(make_generator(&config));
+
+    // Load persisted block edits.
+    let save_dir = std::path::PathBuf::from(&config.world.save_dir);
+    if config.world.save {
+        let edits = persistence::load_blocks(&save_dir);
+        if !edits.is_empty() {
+            info!("loaded {} saved block edit(s)", edits.len());
+        }
+        world.load_edits(edits);
+    }
 
     // Start the mod runtime, if enabled.
     let (mods, action_rx) = if config.mods.enabled {
@@ -71,6 +86,10 @@ pub async fn run(config: Config) -> Result<()> {
     }
 
     tokio::spawn(game_loop(shared.clone()));
+
+    if shared.config.world.save {
+        tokio::spawn(save_loop(shared.clone(), save_dir));
+    }
 
     if shared.config.control.enabled {
         let s = shared.clone();
@@ -110,8 +129,11 @@ async fn game_loop(shared: Arc<Shared>) {
         interval.tick().await;
         ticks += 1;
 
-        // Mob spawning and AI run every tick.
-        mobs::tick(&shared, ticks);
+        // Advance the world clock; mobs, items and projectiles run every tick.
+        let time_of_day = shared.advance_time();
+        let is_night = (13_000..23_000).contains(&time_of_day);
+        mobs::tick(&shared, ticks, is_night);
+        drops::tick(&shared);
 
         // One mod tick per second keeps the JS bridge lightly loaded.
         if ticks.is_multiple_of(20) {
@@ -125,9 +147,24 @@ async fn game_loop(shared: Arc<Shared>) {
 
         // Keep-alive and world time every 10 seconds.
         if ticks.is_multiple_of(200) {
-            let time_of_day = (ticks as i64) % 24_000;
             shared.broadcast(clientbound::keep_alive(ticks as i64));
             shared.broadcast(clientbound::update_time(ticks as i64, time_of_day));
+        }
+    }
+}
+
+/// Periodically persist world edits and online players' data.
+async fn save_loop(shared: Arc<Shared>, save_dir: std::path::PathBuf) {
+    let mut interval = tokio::time::interval(Duration::from_secs(60));
+    interval.tick().await; // skip the immediate first tick
+    loop {
+        interval.tick().await;
+        let edits = shared.world.lock().unwrap().edits().clone();
+        if let Err(e) = persistence::save_blocks(&save_dir, &edits) {
+            error!("failed to save world: {e}");
+        }
+        for player in shared.players() {
+            let _ = persistence::save_player(&save_dir, player.uuid, &player.snapshot_data());
         }
     }
 }

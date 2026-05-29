@@ -9,24 +9,11 @@ use std::time::Instant;
 
 use bytes::BytesMut;
 use cubeplane_mods::ModRuntime;
-use cubeplane_world::{block, World};
+use cubeplane_world::World;
 
 use crate::config::Config;
-use crate::entity::Mob;
+use crate::entity::{ItemEntity, Mob, Projectile};
 use crate::player::Player;
-
-/// The nine hotbar blocks players build with, slot 0..9.
-pub const HOTBAR: [(&str, u16); 9] = [
-    ("stone", block::STONE),
-    ("dirt", block::DIRT),
-    ("cobblestone", block::COBBLESTONE),
-    ("oak_planks", block::OAK_PLANKS),
-    ("glass", block::GLASS),
-    ("sand", block::SAND),
-    ("oak_log", block::OAK_LOG),
-    ("oak_leaves", block::OAK_LEAVES),
-    ("grass_block", block::GRASS_BLOCK),
-];
 
 /// Shared server state.
 pub struct Shared {
@@ -34,8 +21,12 @@ pub struct Shared {
     pub world: Mutex<World>,
     players: RwLock<HashMap<i32, Player>>,
     pub(crate) mobs: RwLock<HashMap<i32, Mob>>,
+    pub(crate) items: RwLock<HashMap<i32, ItemEntity>>,
+    pub(crate) projectiles: RwLock<HashMap<i32, Projectile>>,
     next_entity_id: AtomicI32,
     total_joins: AtomicU64,
+    /// World time of day in ticks (0..24000), advanced by the game loop.
+    world_time: std::sync::atomic::AtomicI64,
     pub mods: Option<ModRuntime>,
     started: Instant,
 }
@@ -47,8 +38,11 @@ impl Shared {
             world: Mutex::new(world),
             players: RwLock::new(HashMap::new()),
             mobs: RwLock::new(HashMap::new()),
+            items: RwLock::new(HashMap::new()),
+            projectiles: RwLock::new(HashMap::new()),
             next_entity_id: AtomicI32::new(1),
             total_joins: AtomicU64::new(0),
+            world_time: std::sync::atomic::AtomicI64::new(1000),
             mods,
             started: Instant::now(),
         })
@@ -105,6 +99,16 @@ impl Shared {
         self.mobs.write().unwrap().get_mut(&entity_id).map(f)
     }
 
+    /// Register a dropped item entity.
+    pub fn add_item_entity(&self, item: ItemEntity) {
+        self.items.write().unwrap().insert(item.entity_id, item);
+    }
+
+    /// Register a projectile.
+    pub fn add_projectile(&self, proj: Projectile) {
+        self.projectiles.write().unwrap().insert(proj.entity_id, proj);
+    }
+
     /// Look up a player by (case-insensitive) name.
     pub fn player_by_name(&self, name: &str) -> Option<Player> {
         self.players
@@ -123,6 +127,23 @@ impl Shared {
     /// Total joins observed since startup.
     pub fn total_joins(&self) -> u64 {
         self.total_joins.load(Ordering::Relaxed)
+    }
+
+    /// Current time of day (0..24000).
+    pub fn world_time(&self) -> i64 {
+        self.world_time.load(Ordering::Relaxed)
+    }
+
+    /// Advance the world clock by one tick and return the new time.
+    pub fn advance_time(&self) -> i64 {
+        let next = (self.world_time.load(Ordering::Relaxed) + 1) % 24_000;
+        self.world_time.store(next, Ordering::Relaxed);
+        next
+    }
+
+    /// Set the time of day.
+    pub fn set_time(&self, time: i64) {
+        self.world_time.store(time.rem_euclid(24_000), Ordering::Relaxed);
     }
 
     /// Send a payload to every connected player.
@@ -147,9 +168,4 @@ impl Shared {
             m.fire(event);
         }
     }
-}
-
-/// Resolve a hotbar slot to its `(name, state id)` block, clamped into range.
-pub fn hotbar_block(slot: u8) -> (&'static str, u16) {
-    HOTBAR[(slot as usize).min(HOTBAR.len() - 1)]
 }

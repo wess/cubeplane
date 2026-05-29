@@ -10,7 +10,9 @@ use cubeplane_world::block;
 
 use crate::clientbound as cb;
 use crate::combat;
+use crate::drops;
 use crate::entity::{Mob, MobKind};
+use crate::item;
 use crate::player::Player;
 use crate::state::Shared;
 
@@ -22,7 +24,7 @@ const DESPAWN_RANGE: f64 = 56.0;
 const VEL_UNIT: f64 = 8000.0;
 
 /// Advance all mobs by one tick and occasionally spawn new ones.
-pub fn tick(shared: &Arc<Shared>, tick: u64) {
+pub fn tick(shared: &Arc<Shared>, tick: u64, is_night: bool) {
     let players = shared.players();
 
     // With nobody online, clear the world of mobs.
@@ -49,10 +51,17 @@ pub fn tick(shared: &Arc<Shared>, tick: u64) {
                 continue;
             }
 
-            // Killed (by a player attack) but not yet animating.
+            // Killed (by a player attack) but not yet animating: drop loot,
+            // award XP and play the death animation.
             if mob.health <= 0.0 {
                 mob.dying = Some(10);
                 shared.broadcast(cb::entity_status(mob.entity_id, 3));
+                drop_loot(shared, mob.kind, mob.x, mob.y, mob.z);
+                let xp = xp_for(mob.kind);
+                shared.broadcast(cb::spawn_xp_orb(shared.next_entity_id(), mob.x, mob.y, mob.z, xp as i16));
+                if let Some((p, _)) = nearest_player(&players, mob.x, mob.z) {
+                    combat::grant_xp(&p, xp);
+                }
                 continue;
             }
 
@@ -76,7 +85,88 @@ pub fn tick(shared: &Arc<Shared>, tick: u64) {
 
     // Spawn roughly once a second.
     if tick.is_multiple_of(20) {
-        try_spawn(shared, &players);
+        try_spawn(shared, &players, is_night);
+    }
+}
+
+/// XP awarded for killing a mob.
+fn xp_for(kind: MobKind) -> i32 {
+    if kind.hostile() {
+        5
+    } else {
+        2
+    }
+}
+
+/// Drop a mob's loot at its position.
+fn drop_loot(shared: &Arc<Shared>, kind: MobKind, x: f64, y: f64, z: f64) {
+    let mut rng = rand::thread_rng();
+    let mut drop = |name: &str, lo: u8, hi: u8| {
+        if let Some(id) = item::by_name(name) {
+            let count = rng.gen_range(lo..=hi);
+            if count > 0 {
+                drops::spawn_item(shared, id, count, x, y + 0.3, z, 10);
+            }
+        }
+    };
+    match kind {
+        MobKind::Zombie => drop("rotten_flesh", 0, 2),
+        MobKind::Skeleton => {
+            drop("bone", 0, 2);
+            drop("arrow", 0, 2);
+        }
+        MobKind::Spider => {
+            drop("string", 0, 2);
+            drop("spider_eye", 0, 1);
+        }
+        MobKind::Creeper => drop("gunpowder", 0, 2),
+        MobKind::Pig => drop("porkchop", 1, 3),
+        MobKind::Sheep => drop("mutton", 1, 2),
+        MobKind::Chicken => {
+            drop("feather", 0, 2);
+            drop("egg", 0, 1);
+        }
+        MobKind::Cow => {}
+    }
+}
+
+/// Blow up at `(cx,cy,cz)`: clear blocks in a sphere, hurt nearby players, and
+/// send the Explosion packet (which drives the client's particles and sound).
+fn explode(shared: &Arc<Shared>, cx: f64, cy: f64, cz: f64, power: f32) {
+    let r = power.ceil() as i32;
+    let (bx, by, bz) = (cx.floor() as i32, cy.floor() as i32, cz.floor() as i32);
+    let mut offsets = Vec::new();
+    {
+        let mut world = shared.world.lock().unwrap();
+        for dy in -r..=r {
+            for dz in -r..=r {
+                for dx in -r..=r {
+                    if ((dx * dx + dy * dy + dz * dz) as f32).sqrt() > power {
+                        continue;
+                    }
+                    let (wx, wy, wz) = (bx + dx, by + dy, bz + dz);
+                    let cur = world.get_block(wx, wy, wz);
+                    if cur != block::AIR && cur != block::BEDROCK {
+                        world.set_block(wx, wy, wz, block::AIR);
+                        offsets.push((dx as i8, dy as i8, dz as i8));
+                    }
+                }
+            }
+        }
+    }
+    shared.broadcast(cb::explosion(cx, cy, cz, power, &offsets));
+
+    // Hurt players within the blast.
+    for p in shared.players() {
+        if p.is_dead() {
+            continue;
+        }
+        let s = p.state();
+        let dist = ((s.x - cx).powi(2) + (s.y - cy).powi(2) + (s.z - cz).powi(2)).sqrt();
+        if dist <= power as f64 * 1.5 {
+            let dmg = ((1.0 - dist / (power as f64 * 1.5)) * 14.0).max(1.0) as f32;
+            combat::damage_player(shared, &p, dmg, "was blown up");
+        }
     }
 }
 
@@ -141,17 +231,45 @@ fn step_mob(shared: &Arc<Shared>, players: &[Player], mob: &mut Mob, tick: u64) 
         }
     }
 
-    // Melee.
+    // Attacks.
     if mob.attack_cooldown > 0 {
         mob.attack_cooldown -= 1;
     }
-    if mob.kind.attack_damage() > 0.0 {
-        if let Some((p, _)) = &target {
-            let s = p.state();
-            let dx = s.x - mob.x;
-            let dz = s.z - mob.z;
-            let dist2 = dx * dx + dz * dz;
-            if dist2 < 2.25 && (s.y - mob.y).abs() < 2.0 && mob.attack_cooldown == 0 && !s.dead {
+    if let Some((p, dist)) = &target {
+        let s = p.state();
+        let dx = s.x - mob.x;
+        let dz = s.z - mob.z;
+        let dist2 = dx * dx + dz * dz;
+
+        match mob.kind {
+            // Creepers detonate on contact.
+            MobKind::Creeper if *dist < 3.0 => {
+                explode(shared, mob.x, mob.y, mob.z, 3.0);
+                mob.health = 0.0; // removed (with loot) next tick
+                return;
+            }
+            // Skeletons fire arrows from range.
+            MobKind::Skeleton if *dist < 14.0 && mob.attack_cooldown == 0 && !s.dead => {
+                drops::spawn_arrow(
+                    shared,
+                    mob.entity_id,
+                    mob.x,
+                    mob.y + 1.2,
+                    mob.z,
+                    dx,
+                    (s.y + 1.0) - (mob.y + 1.2),
+                    dz,
+                    2.0,
+                );
+                mob.attack_cooldown = 40;
+            }
+            // Zombies and spiders melee.
+            _ if mob.kind.attack_damage() > 0.0
+                && dist2 < 2.25
+                && (s.y - mob.y).abs() < 2.0
+                && mob.attack_cooldown == 0
+                && !s.dead =>
+            {
                 combat::damage_player(
                     shared,
                     p,
@@ -159,12 +277,12 @@ fn step_mob(shared: &Arc<Shared>, players: &[Player], mob: &mut Mob, tick: u64) 
                     &format!("was slain by a {}", mob.kind.name()),
                 );
                 mob.attack_cooldown = 20;
-                // Knock the player back.
                 let len = dist2.sqrt().max(1e-6);
                 let vx = (dx / len * 0.45 * VEL_UNIT) as i16;
                 let vz = (dz / len * 0.45 * VEL_UNIT) as i16;
                 p.send(cb::entity_velocity(p.entity_id, vx, 3500, vz));
             }
+            _ => {}
         }
     }
 
@@ -173,12 +291,14 @@ fn step_mob(shared: &Arc<Shared>, players: &[Player], mob: &mut Mob, tick: u64) 
     shared.broadcast(cb::entity_head_rotation(mob.entity_id, mob.yaw));
 }
 
-/// Try to spawn one mob near a random player, on the surface.
-fn try_spawn(shared: &Arc<Shared>, players: &[Player]) {
+/// Try to spawn one mob near a random player, on the surface. Hostiles only
+/// appear at night (and only if enabled in config).
+fn try_spawn(shared: &Arc<Shared>, players: &[Player], is_night: bool) {
     let cap = (players.len() * 8).min(40);
     if shared.mob_count() >= cap {
         return;
     }
+    let allow_hostiles = is_night && shared.config.world.spawn_hostiles;
 
     let mut rng = rand::thread_rng();
     let anchor = players[rng.gen_range(0..players.len())].state();
@@ -209,7 +329,12 @@ fn try_spawn(shared: &Arc<Shared>, players: &[Player]) {
         return;
     };
 
-    let kind = MobKind::ALL[rng.gen_range(0..MobKind::ALL.len())];
+    // Pick a kind, re-rolling hostiles into passives when not allowed.
+    let mut kind = MobKind::ALL[rng.gen_range(0..MobKind::ALL.len())];
+    if kind.hostile() && !allow_hostiles {
+        let passives: Vec<MobKind> = MobKind::ALL.into_iter().filter(|k| !k.hostile()).collect();
+        kind = passives[rng.gen_range(0..passives.len())];
+    }
     let entity_id = shared.next_entity_id();
     let heading = rng.gen::<f32>() * std::f32::consts::TAU;
     let mob = Mob::new(entity_id, kind, sx, y as f64, sz, heading);
@@ -230,6 +355,17 @@ fn try_spawn(shared: &Arc<Shared>, players: &[Player]) {
     shared.add_mob(mob);
 }
 
+/// Spawn a specific mob at a position (used by the /summon command and mods).
+pub fn summon(shared: &Arc<Shared>, kind: MobKind, x: f64, y: f64, z: f64) {
+    let entity_id = shared.next_entity_id();
+    let heading = rand::thread_rng().gen::<f32>() * std::f32::consts::TAU;
+    let mob = Mob::new(entity_id, kind, x, y, z, heading);
+    shared.broadcast(cb::spawn_entity(
+        entity_id, mob.uuid, kind.type_id(), mob.x, mob.y, mob.z, mob.yaw, mob.pitch, mob.yaw, 0, (0, 0, 0),
+    ));
+    shared.add_mob(mob);
+}
+
 /// Find the nearest living player to a point, with horizontal distance.
 fn nearest_player(players: &[Player], x: f64, z: f64) -> Option<(Player, f64)> {
     players
@@ -245,18 +381,18 @@ fn nearest_player(players: &[Player], x: f64, z: f64) -> Option<(Player, f64)> {
 }
 
 /// Apply a player's melee attack to a mob (called from the connection task).
-pub fn player_attack(shared: &Arc<Shared>, attacker: &Player, target: i32) {
-    const FIST_DAMAGE: f32 = 3.0;
+/// Death (loot/XP/animation) is handled centrally by [`tick`].
+pub fn player_attack(shared: &Arc<Shared>, attacker: &Player, target: i32, damage: f32) {
     let hit = shared.with_mob(target, |m| {
         if m.alive() {
-            m.health -= FIST_DAMAGE;
-            Some((m.x, m.y, m.z, m.health <= 0.0))
+            m.health -= damage;
+            Some((m.x, m.z))
         } else {
             None
         }
     });
 
-    let Some(Some((mx, _my, mz, killed))) = hit else {
+    let Some(Some((mx, mz))) = hit else {
         return;
     };
 
@@ -271,14 +407,4 @@ pub fn player_attack(shared: &Arc<Shared>, attacker: &Player, target: i32) {
     let vx = (dx / len * 0.5 * VEL_UNIT) as i16;
     let vz = (dz / len * 0.5 * VEL_UNIT) as i16;
     shared.broadcast(cb::entity_velocity(target, vx, 3200, vz));
-
-    if killed {
-        // Begin the death animation; the tick removes it shortly after.
-        shared.with_mob(target, |m| {
-            if m.dying.is_none() {
-                m.dying = Some(10);
-            }
-        });
-        shared.broadcast(cb::entity_status(target, 3));
-    }
 }
