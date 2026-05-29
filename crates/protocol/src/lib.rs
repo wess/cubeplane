@@ -64,7 +64,7 @@ pub const KNOWN_VERSIONS: &[Version] = &[
 /// canonical/native layout; 1.20.2 (764) is served through the translation layer
 /// (id maps + body rewriters + the Configuration phase). This is the single
 /// source of truth the login gate consults.
-pub const SUPPORTED_PROTOCOLS: &[i32] = &[PROTOCOL_VERSION, 764, 762];
+pub const SUPPORTED_PROTOCOLS: &[i32] = &[PROTOCOL_VERSION, 764, 762, 761];
 
 /// Whether cubeplane can host a play session for a client protocol version.
 pub fn is_supported(protocol: i32) -> bool {

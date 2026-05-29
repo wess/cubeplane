@@ -2402,6 +2402,65 @@ mod encryption_tests {
     /// Drive a simulated 1.19.4 (protocol 762) client: handshake → login → play
     /// directly (no Configuration phase), verifying the Join Game body is
     /// rewritten to the 1.19.4 layout (codec inline, no portalCooldown).
+    /// Drive a simulated 1.19.3 (protocol 761) client: handshake → login → play
+    /// (no Configuration phase). Verifies both the play id remap (Join Game is
+    /// canonical 0x28 → wire 0x24) and the 1.19.x body rewrite.
+    #[tokio::test]
+    async fn version_761_join_with_id_remap() {
+        let probe = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = probe.local_addr().unwrap().port();
+        drop(probe);
+
+        let mut config = Config::default();
+        config.server.host = "127.0.0.1".into();
+        config.server.port = port;
+        config.server.compression_threshold = -1;
+        config.server.online_mode = false;
+        config.server.view_distance = 2;
+        config.control.enabled = false;
+        config.mods.enabled = false;
+        config.world.save = false;
+        config.world.generator = "flat".into();
+        tokio::spawn(async move {
+            let _ = crate::run(config).await;
+        });
+        tokio::time::sleep(Duration::from_millis(400)).await;
+
+        let mut conn = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        let mut hs = BytesMut::new();
+        hs.write_varint(0x00);
+        hs.write_varint(761);
+        hs.write_string("127.0.0.1");
+        hs.write_u16(port);
+        hs.write_varint(2);
+        write_frame(&mut conn, &hs, None).await;
+        let mut ls = BytesMut::new();
+        ls.write_varint(0x00);
+        ls.write_string("V761");
+        ls.write_bool(false);
+        write_frame(&mut conn, &ls, None).await;
+
+        let (id, _b) = read_frame(&mut conn, None).await;
+        assert_eq!(id, 0x02, "expected Login Success");
+
+        // Join Game arrives at the 1.19.3 wire id 0x24 (remapped from 0x28).
+        let mut saw_join = false;
+        for _ in 0..40 {
+            let (pid, mut body) = read_frame(&mut conn, None).await;
+            if pid == 0x24 {
+                let _entity = body.read_i32().unwrap();
+                let _hardcore = body.read_bool().unwrap();
+                let _gm = body.read_u8().unwrap();
+                let _pgm = body.read_i8().unwrap();
+                let world_count = body.read_varint().unwrap();
+                assert!(world_count >= 1);
+                saw_join = true;
+                break;
+            }
+        }
+        assert!(saw_join, "did not receive a 761 Join Game at the remapped id");
+    }
+
     #[tokio::test]
     async fn version_762_join_without_configuration_phase() {
         let probe = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
