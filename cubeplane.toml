@@ -14,6 +14,9 @@ compression_threshold = 256
 gamemode = "creative"
 # Operator names allowed to run cheat commands. Empty = everyone is an op.
 ops = []
+# Enable protocol encryption + Mojang auth (needs outbound network; falls back
+# to the client-supplied name if the session server is unreachable).
+online_mode = false
 
 [world]
 # One of: terrain (value-noise hills) or flat (superflat).

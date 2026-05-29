@@ -13,6 +13,7 @@ mod config;
 mod connection;
 mod control;
 mod drops;
+mod encryption;
 mod entity;
 mod ids;
 mod inventory;
@@ -75,7 +76,23 @@ pub async fn run(config: Config) -> Result<()> {
         (None, None)
     };
 
-    let shared = Shared::new(config, world, mods);
+    // Generate an RSA keypair for online mode.
+    let server_key = if config.server.online_mode {
+        match encryption::ServerKey::generate() {
+            Ok(k) => {
+                info!("online mode: RSA keypair generated");
+                Some(Arc::new(k))
+            }
+            Err(e) => {
+                error!("failed to generate server key, falling back to offline: {e}");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    let shared = Shared::new(config, world, mods, server_key);
 
     // Restore saved chest contents.
     if shared.config.world.save {

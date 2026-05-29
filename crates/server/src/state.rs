@@ -34,11 +34,18 @@ pub struct Shared {
     /// World time of day in ticks (0..24000), advanced by the game loop.
     world_time: std::sync::atomic::AtomicI64,
     pub mods: Option<ModRuntime>,
+    /// RSA keypair for online-mode encryption (present only when enabled).
+    pub server_key: Option<Arc<crate::encryption::ServerKey>>,
     started: Instant,
 }
 
 impl Shared {
-    pub fn new(config: Config, world: World, mods: Option<ModRuntime>) -> Arc<Shared> {
+    pub fn new(
+        config: Config,
+        world: World,
+        mods: Option<ModRuntime>,
+        server_key: Option<Arc<crate::encryption::ServerKey>>,
+    ) -> Arc<Shared> {
         Arc::new(Shared {
             config,
             world: Mutex::new(world),
@@ -51,6 +58,7 @@ impl Shared {
             total_joins: AtomicU64::new(0),
             world_time: std::sync::atomic::AtomicI64::new(1000),
             mods,
+            server_key,
             started: Instant::now(),
         })
     }

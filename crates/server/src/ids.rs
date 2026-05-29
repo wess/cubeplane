@@ -27,6 +27,7 @@ pub mod status_sb {
 /// Login, clientbound.
 pub mod login_cb {
     pub const DISCONNECT: i32 = 0x00;
+    pub const ENCRYPTION_REQUEST: i32 = 0x01;
     pub const SUCCESS: i32 = 0x02;
     pub const SET_COMPRESSION: i32 = 0x03;
 }
@@ -34,6 +35,7 @@ pub mod login_cb {
 /// Login, serverbound.
 pub mod login_sb {
     pub const LOGIN_START: i32 = 0x00;
+    pub const ENCRYPTION_RESPONSE: i32 = 0x01;
 }
 
 /// Play, clientbound.

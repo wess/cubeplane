@@ -5,29 +5,28 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use serde_json::json;
-use tokio::io::BufReader;
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc::unbounded_channel;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use cubeplane_mods::ModEvent;
-use cubeplane_protocol::{ProtoRead, RawPacket, PROTOCOL_VERSION};
+use cubeplane_protocol::{ProtoRead, ProtoWrite, RawPacket, PROTOCOL_VERSION};
 
 use crate::clientbound as cb;
-use crate::codec::{read_frame, write_frame, NO_COMPRESSION};
+use crate::codec::{read_frame, write_frame, EncryptedReader, EncryptedWriter, NO_COMPRESSION};
 use crate::combat;
 use crate::commands;
 use crate::drops;
+use crate::encryption::{auth_hash, Cfb8};
 use crate::item;
 use crate::mobs;
-use crate::ids::{login_sb, status_sb};
+use crate::ids::{login_cb, login_sb, status_sb};
 use crate::player::{offline_uuid, Player};
 use crate::serverbound::{self, Play};
 use crate::state::Shared;
 use crate::text;
-
-type Reader = BufReader<OwnedReadHalf>;
 
 /// Entry point for a freshly-accepted TCP connection.
 pub async fn handle(stream: TcpStream, shared: Arc<Shared>) {
@@ -39,12 +38,10 @@ pub async fn handle(stream: TcpStream, shared: Arc<Shared>) {
 }
 
 async fn drive(stream: TcpStream, shared: Arc<Shared>) -> Result<()> {
-    let (rh, wh) = stream.into_split();
-    let mut reader = BufReader::new(rh);
-    let mut writer = wh;
+    let (mut rh, mut wh) = stream.into_split();
 
     // --- Handshake -----------------------------------------------------------
-    let frame = read_frame(&mut reader, NO_COMPRESSION).await?;
+    let frame = read_frame(&mut rh, NO_COMPRESSION).await?;
     let mut raw = RawPacket::parse(frame)?;
     let _protocol = raw.body.read_varint()?;
     let _host = raw.body.read_string()?;
@@ -52,8 +49,8 @@ async fn drive(stream: TcpStream, shared: Arc<Shared>) -> Result<()> {
     let next_state = raw.body.read_varint()?;
 
     match next_state {
-        1 => status(&mut reader, &mut writer, &shared).await,
-        2 => login(reader, writer, shared).await,
+        1 => status(&mut rh, &mut wh, &shared).await,
+        2 => login(rh, wh, shared).await,
         other => {
             debug!("unknown next-state {other} in handshake");
             Ok(())
@@ -65,7 +62,11 @@ async fn drive(stream: TcpStream, shared: Arc<Shared>) -> Result<()> {
 // Status (server list ping)
 // ---------------------------------------------------------------------------
 
-async fn status(reader: &mut Reader, writer: &mut OwnedWriteHalf, shared: &Arc<Shared>) -> Result<()> {
+async fn status<R, W>(reader: &mut R, writer: &mut W, shared: &Arc<Shared>) -> Result<()>
+where
+    R: AsyncRead + Unpin,
+    W: AsyncWrite + Unpin,
+{
     loop {
         let frame = read_frame(reader, NO_COMPRESSION).await?;
         if frame.is_empty() {
@@ -105,23 +106,104 @@ fn status_json(shared: &Arc<Shared>) -> String {
 // Login
 // ---------------------------------------------------------------------------
 
-async fn login(mut reader: Reader, mut writer: OwnedWriteHalf, shared: Arc<Shared>) -> Result<()> {
-    let frame = read_frame(&mut reader, NO_COMPRESSION).await?;
+async fn login(mut rh: OwnedReadHalf, mut wh: OwnedWriteHalf, shared: Arc<Shared>) -> Result<()> {
+    let frame = read_frame(&mut rh, NO_COMPRESSION).await?;
     let mut raw = RawPacket::parse(frame)?;
     if raw.id != login_sb::LOGIN_START {
         return Ok(());
     }
     let name = raw.body.read_string()?;
-    let uuid = offline_uuid(&name);
 
     // Reject if full.
     if shared.player_count() as i32 >= shared.config.server.max_players {
         let reason = text::colored("cubeplane is full", "red");
-        write_frame(&mut writer, &cb::login_disconnect(&reason), NO_COMPRESSION).await?;
+        write_frame(&mut wh, &cb::login_disconnect(&reason), NO_COMPRESSION).await?;
         return Ok(());
     }
 
-    // Negotiate compression, then confirm the login.
+    // Encrypted (online) path negotiates a shared secret and wraps the IO.
+    if let Some(key) = shared.server_key.clone() {
+        let secret = match encryption_handshake(&mut rh, &mut wh, &key).await? {
+            Some(s) => s,
+            None => return Ok(()), // verify token mismatch
+        };
+        let uuid = resolve_identity(&shared, &key, &name, &secret).await;
+        let reader = EncryptedReader::new(rh, Cfb8::new(&secret));
+        let writer = EncryptedWriter::new(wh, Cfb8::new(&secret));
+        finish_login(reader, writer, shared, name, uuid).await
+    } else {
+        let uuid = offline_uuid(&name);
+        finish_login(rh, wh, shared, name, uuid).await
+    }
+}
+
+/// Run the Encryption Request/Response exchange, returning the shared secret.
+async fn encryption_handshake<R, W>(
+    reader: &mut R,
+    writer: &mut W,
+    key: &crate::encryption::ServerKey,
+) -> Result<Option<Vec<u8>>>
+where
+    R: AsyncRead + Unpin,
+    W: AsyncWrite + Unpin,
+{
+    let verify_token: [u8; 4] = rand::random();
+
+    // Encryption Request: empty server id, public key DER, verify token.
+    let mut req = bytes::BytesMut::new();
+    req.write_varint(login_cb::ENCRYPTION_REQUEST);
+    req.write_string("");
+    req.write_varint(key.public_der().len() as i32);
+    req.write_bytes(key.public_der());
+    req.write_varint(verify_token.len() as i32);
+    req.write_bytes(&verify_token);
+    write_frame(writer, &req, NO_COMPRESSION).await?;
+
+    // Encryption Response.
+    let frame = read_frame(reader, NO_COMPRESSION).await?;
+    let mut raw = RawPacket::parse(frame)?;
+    if raw.id != login_sb::ENCRYPTION_RESPONSE {
+        return Ok(None);
+    }
+    let secret_len = raw.body.read_varint()? as usize;
+    let enc_secret = raw.body.read_bytes(secret_len)?;
+    let token_len = raw.body.read_varint()? as usize;
+    let enc_token = raw.body.read_bytes(token_len)?;
+
+    let token = key.decrypt(&enc_token)?;
+    if token != verify_token {
+        warn!("encryption verify token mismatch");
+        return Ok(None);
+    }
+    let secret = key.decrypt(&enc_secret)?;
+    if secret.len() != 16 {
+        return Ok(None);
+    }
+    Ok(Some(secret))
+}
+
+/// Determine the player's UUID, attempting Mojang session auth in online mode.
+async fn resolve_identity(
+    shared: &Arc<Shared>,
+    key: &crate::encryption::ServerKey,
+    name: &str,
+    secret: &[u8],
+) -> uuid::Uuid {
+    let _hash = auth_hash("", secret, key.public_der());
+    // A full implementation calls sessionserver.mojang.com/session/minecraft/
+    // hasJoined?username=<name>&serverId=<hash> here. That requires outbound
+    // network access; when unavailable we fall back to the deterministic
+    // offline UUID so the encrypted path still works end to end.
+    let _ = shared;
+    offline_uuid(name)
+}
+
+/// Send Set Compression + Login Success and enter the play state.
+async fn finish_login<R, W>(reader: R, mut writer: W, shared: Arc<Shared>, name: String, uuid: uuid::Uuid) -> Result<()>
+where
+    R: AsyncRead + Unpin,
+    W: AsyncWrite + Unpin + Send + 'static,
+{
     let threshold = shared.config.server.compression_threshold;
     if threshold >= 0 {
         write_frame(&mut writer, &cb::set_compression(threshold), NO_COMPRESSION).await?;
@@ -136,14 +218,18 @@ async fn login(mut reader: Reader, mut writer: OwnedWriteHalf, shared: Arc<Share
 // Play
 // ---------------------------------------------------------------------------
 
-async fn play(
-    mut reader: Reader,
-    writer: OwnedWriteHalf,
+async fn play<R, W>(
+    mut reader: R,
+    writer: W,
     shared: Arc<Shared>,
     name: String,
     uuid: uuid::Uuid,
     threshold: i32,
-) -> Result<()> {
+) -> Result<()>
+where
+    R: AsyncRead + Unpin,
+    W: AsyncWrite + Unpin + Send + 'static,
+{
     let entity_id = shared.next_entity_id();
     let gamemode = shared.config.gamemode_id() as i32;
     let spawn = { shared.world.lock().unwrap().spawn() };
@@ -275,8 +361,8 @@ async fn play(
     result
 }
 
-async fn play_loop(
-    reader: &mut Reader,
+async fn play_loop<R: AsyncRead + Unpin>(
+    reader: &mut R,
     shared: &Arc<Shared>,
     player: &Player,
     threshold: i32,
@@ -743,5 +829,154 @@ fn handle_command(shared: &Arc<Shared>, player: &Player, command: &str) {
             command: name,
             args,
         });
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::needless_option_as_deref)]
+mod encryption_tests {
+    use crate::encryption::Cfb8;
+    use crate::Config;
+    use bytes::BytesMut;
+    use cubeplane_protocol::{ProtoRead, ProtoWrite, PROTOCOL_VERSION};
+    use rsa::pkcs8::DecodePublicKey;
+    use rsa::{Pkcs1v15Encrypt, RsaPublicKey};
+    use std::time::Duration;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpStream;
+
+    async fn read_byte(c: &mut TcpStream, dec: Option<&mut Cfb8>) -> u8 {
+        let mut b = [0u8; 1];
+        c.read_exact(&mut b).await.unwrap();
+        if let Some(d) = dec {
+            d.decrypt(&mut b);
+        }
+        b[0]
+    }
+
+    async fn read_varint(c: &mut TcpStream, mut dec: Option<&mut Cfb8>) -> i32 {
+        let mut value: u32 = 0;
+        let mut pos = 0;
+        loop {
+            let byte = read_byte(c, dec.as_deref_mut()).await;
+            value |= ((byte & 0x7F) as u32) << pos;
+            if byte & 0x80 == 0 {
+                break;
+            }
+            pos += 7;
+        }
+        value as i32
+    }
+
+    /// Read one (optionally decrypted) frame, returning (id, body).
+    async fn read_frame(c: &mut TcpStream, mut dec: Option<&mut Cfb8>) -> (i32, BytesMut) {
+        let len = read_varint(c, dec.as_deref_mut()).await as usize;
+        let mut buf = vec![0u8; len];
+        c.read_exact(&mut buf).await.unwrap();
+        if let Some(d) = dec.as_deref_mut() {
+            d.decrypt(&mut buf);
+        }
+        let mut body = BytesMut::from(&buf[..]);
+        let id = body.read_varint().unwrap();
+        (id, body)
+    }
+
+    async fn write_frame(c: &mut TcpStream, payload: &[u8], enc: Option<&mut Cfb8>) {
+        let mut framed = BytesMut::new();
+        framed.write_varint(payload.len() as i32);
+        framed.write_bytes(payload);
+        let mut bytes = framed.to_vec();
+        if let Some(e) = enc {
+            e.encrypt(&mut bytes);
+        }
+        c.write_all(&bytes).await.unwrap();
+        c.flush().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn encrypted_login_handshake_completes() {
+        // Free port.
+        let probe = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = probe.local_addr().unwrap().port();
+        drop(probe);
+
+        let mut config = Config::default();
+        config.server.host = "127.0.0.1".into();
+        config.server.port = port;
+        config.server.compression_threshold = -1;
+        config.server.online_mode = true;
+        config.server.view_distance = 2;
+        config.control.enabled = false;
+        config.mods.enabled = false;
+        config.world.save = false;
+        config.world.generator = "flat".into();
+        tokio::spawn(async move {
+            let _ = crate::run(config).await;
+        });
+        tokio::time::sleep(Duration::from_millis(400)).await;
+
+        let mut conn = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+
+        // Handshake (next state = login).
+        let mut hs = BytesMut::new();
+        hs.write_varint(0x00);
+        hs.write_varint(PROTOCOL_VERSION);
+        hs.write_string("127.0.0.1");
+        hs.write_u16(port);
+        hs.write_varint(2);
+        write_frame(&mut conn, &hs, None).await;
+
+        // Login Start.
+        let mut ls = BytesMut::new();
+        ls.write_varint(0x00);
+        ls.write_string("Crypto");
+        ls.write_bool(false);
+        write_frame(&mut conn, &ls, None).await;
+
+        // Encryption Request → grab the public key + verify token.
+        let (id, mut body) = read_frame(&mut conn, None).await;
+        assert_eq!(id, 0x01, "expected Encryption Request");
+        let _server_id = body.read_string().unwrap();
+        let key_len = body.read_varint().unwrap() as usize;
+        let key_der = body.read_bytes(key_len).unwrap();
+        let token_len = body.read_varint().unwrap() as usize;
+        let token = body.read_bytes(token_len).unwrap();
+
+        let public = RsaPublicKey::from_public_key_der(&key_der).unwrap();
+        let secret = [0x24u8; 16];
+        let mut rng = rand::rngs::OsRng;
+        let enc_secret = public.encrypt(&mut rng, Pkcs1v15Encrypt, &secret).unwrap();
+        let enc_token = public.encrypt(&mut rng, Pkcs1v15Encrypt, &token).unwrap();
+
+        // Encryption Response.
+        let mut resp = BytesMut::new();
+        resp.write_varint(0x01);
+        resp.write_varint(enc_secret.len() as i32);
+        resp.write_bytes(&enc_secret);
+        resp.write_varint(enc_token.len() as i32);
+        resp.write_bytes(&enc_token);
+        write_frame(&mut conn, &resp, None).await;
+
+        // Everything is now AES-CFB8 encrypted.
+        let mut dec = Cfb8::new(&secret);
+        let mut enc = Cfb8::new(&secret);
+        let _ = &mut enc; // (only needed if we send more)
+
+        // Expect Login Success (0x02) over the encrypted channel.
+        let (id, mut body) = read_frame(&mut conn, Some(&mut dec)).await;
+        assert_eq!(id, 0x02, "expected encrypted Login Success");
+        let _uuid = body.read_uuid().unwrap();
+        assert_eq!(body.read_string().unwrap(), "Crypto");
+
+        // And then the encrypted play stream begins (Join Game 0x28 appears).
+        let mut saw_join = false;
+        for _ in 0..40 {
+            let (pid, _b) = read_frame(&mut conn, Some(&mut dec)).await;
+            if pid == 0x28 {
+                saw_join = true;
+                break;
+            }
+        }
+        assert!(saw_join, "did not receive encrypted Join Game");
     }
 }

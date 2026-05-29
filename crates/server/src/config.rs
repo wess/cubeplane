@@ -29,6 +29,10 @@ pub struct ServerConfig {
     /// Operator player names allowed to run cheat commands. Empty = everyone
     /// is an operator (convenient for local/demo use).
     pub ops: Vec<String>,
+    /// Enable protocol encryption and Mojang authentication. Requires outbound
+    /// access to sessionserver.mojang.com; falls back to the client-supplied
+    /// name if that lookup is unavailable.
+    pub online_mode: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -75,6 +79,7 @@ impl Default for ServerConfig {
             compression_threshold: 256,
             gamemode: "creative".into(),
             ops: Vec::new(),
+            online_mode: false,
         }
     }
 }

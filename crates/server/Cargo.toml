@@ -24,3 +24,8 @@ rand = { workspace = true }
 anyhow = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+rsa = "0.9"
+sha1 = "0.10"
+aes = "0.8"
+cfb8 = "0.8"
+num-bigint-dig = "0.8"

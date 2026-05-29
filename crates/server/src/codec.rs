@@ -5,12 +5,16 @@
 //! that payload per the vanilla scheme (uncompressed-length VarInt + zlib).
 
 use std::io::{self, Read, Write};
+use std::pin::Pin;
+use std::task::{Context, Poll};
 
 use bytes::{BufMut, BytesMut};
 use flate2::read::ZlibDecoder;
 use flate2::write::ZlibEncoder;
 use flate2::Compression;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
+
+use crate::encryption::Cfb8;
 
 use cubeplane_protocol::write::varint_len;
 use cubeplane_protocol::{ProtoRead, ProtoWrite};
@@ -124,6 +128,110 @@ where
 
 fn invalid<E: std::fmt::Display>(e: E) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, e.to_string())
+}
+
+/// An [`AsyncRead`] that AES-CFB8-decrypts bytes as they arrive.
+pub struct EncryptedReader<R> {
+    inner: R,
+    cipher: Cfb8,
+}
+
+impl<R> EncryptedReader<R> {
+    pub fn new(inner: R, cipher: Cfb8) -> Self {
+        EncryptedReader { inner, cipher }
+    }
+}
+
+impl<R: AsyncRead + Unpin> AsyncRead for EncryptedReader<R> {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        let before = buf.filled().len();
+        match Pin::new(&mut self.inner).poll_read(cx, buf) {
+            Poll::Ready(Ok(())) => {
+                let after = buf.filled().len();
+                if after > before {
+                    self.cipher.decrypt(&mut buf.filled_mut()[before..after]);
+                }
+                Poll::Ready(Ok(()))
+            }
+            other => other,
+        }
+    }
+}
+
+/// An [`AsyncWrite`] that AES-CFB8-encrypts bytes before writing. Encrypted
+/// bytes are buffered so the cipher state always matches what's on the wire,
+/// even across partial writes.
+pub struct EncryptedWriter<W> {
+    inner: W,
+    cipher: Cfb8,
+    pending: Vec<u8>,
+    pos: usize,
+}
+
+impl<W> EncryptedWriter<W> {
+    pub fn new(inner: W, cipher: Cfb8) -> Self {
+        EncryptedWriter { inner, cipher, pending: Vec::new(), pos: 0 }
+    }
+}
+
+impl<W: AsyncWrite + Unpin> EncryptedWriter<W> {
+    /// Drain buffered ciphertext to the inner writer. Returns `Pending` if the
+    /// inner writer is not ready and bytes remain.
+    fn drain(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        while self.pos < self.pending.len() {
+            match Pin::new(&mut self.inner).poll_write(cx, &self.pending[self.pos..]) {
+                Poll::Ready(Ok(0)) => {
+                    return Poll::Ready(Err(io::Error::new(io::ErrorKind::WriteZero, "write zero")))
+                }
+                Poll::Ready(Ok(n)) => self.pos += n,
+                Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
+                Poll::Pending => return Poll::Pending,
+            }
+        }
+        self.pending.clear();
+        self.pos = 0;
+        Poll::Ready(Ok(()))
+    }
+}
+
+impl<W: AsyncWrite + Unpin> AsyncWrite for EncryptedWriter<W> {
+    fn poll_write(self: Pin<&mut Self>, cx: &mut Context<'_>, data: &[u8]) -> Poll<io::Result<usize>> {
+        let me = self.get_mut();
+        // Flush any buffered ciphertext before accepting more.
+        if me.drain(cx)?.is_pending() {
+            return Poll::Pending;
+        }
+        if data.is_empty() {
+            return Poll::Ready(Ok(0));
+        }
+        // Encrypt the whole input once (advancing state) and buffer it.
+        let mut enc = data.to_vec();
+        me.cipher.encrypt(&mut enc);
+        me.pending = enc;
+        me.pos = 0;
+        let _ = me.drain(cx)?; // best-effort immediate write
+        Poll::Ready(Ok(data.len()))
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        let me = self.get_mut();
+        if me.drain(cx)?.is_pending() {
+            return Poll::Pending;
+        }
+        Pin::new(&mut me.inner).poll_flush(cx)
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        let me = self.get_mut();
+        if me.drain(cx)?.is_pending() {
+            return Poll::Pending;
+        }
+        Pin::new(&mut me.inner).poll_shutdown(cx)
+    }
 }
 
 #[cfg(test)]

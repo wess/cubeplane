@@ -33,9 +33,14 @@ workspace of focused crates that snap together.
 - **Real client compatibility** — a vanilla 1.20.1 client connects, logs in,
   and walks around a lit, generated world.
 - **Server List Ping** with live MOTD and player count.
-- **Login** with offline-mode UUIDs and packet **compression**.
+- **Login** with offline-mode UUIDs, packet **compression**, and optional
+  **online-mode encryption** (RSA key exchange + AES-CFB8 stream).
 - **World generation** — superflat or smooth value-noise terrain (no external
-  noise crates), with paletted chunk sections, heightmaps and full skylight.
+  noise crates), with paletted chunk sections and heightmaps.
+- **Real lighting** — skylight and block-light flood-fill (lit caves, shadows,
+  and glowing blocks), packed per section.
+- **Full block registry** — all 1003 1.20.1 blocks resolvable by name for
+  `/setblock`, `/give` and mods, with correct light opacity/emission.
 - **Multiplayer** — players see each other move, chat, and build in real time.
 - **Mobs & AI** — zombies, skeletons, spiders, creepers, pigs, cows, sheep and
   chickens spawn around players, wander with gravity, and hostile mobs chase
