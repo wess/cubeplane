@@ -52,6 +52,7 @@ pub fn tick(shared: &Arc<Shared>, tick: u64, is_night: bool) {
     let mut remove = Vec::new();
     let mut lovers: Vec<(i32, MobKind, f64, f64, f64)> = Vec::new();
     let mut babies: Vec<(MobKind, f64, f64, f64)> = Vec::new();
+    let mut grown: Vec<i32> = Vec::new();
     {
         let mut guard = shared.mobs.write().unwrap();
         for mob in guard.values_mut() {
@@ -87,9 +88,24 @@ pub fn tick(shared: &Arc<Shared>, tick: u64, is_night: bool) {
                 continue;
             }
 
+            // Breeding cooldown ticks down; babies grow into adults.
+            if mob.breed_cooldown > 0 {
+                mob.breed_cooldown -= 1;
+            }
+            if mob.baby && mob.baby_age > 0 {
+                mob.baby_age -= 1;
+                if mob.baby_age == 0 {
+                    mob.baby = false;
+                    grown.push(mob.entity_id);
+                }
+            }
+
+            // Only eligible (adult, off-cooldown) animals seek a mate.
             if mob.in_love > 0 {
                 mob.in_love -= 1;
-                lovers.push((mob.entity_id, mob.kind, mob.x, mob.y, mob.z));
+                if !mob.baby && mob.breed_cooldown == 0 {
+                    lovers.push((mob.entity_id, mob.kind, mob.x, mob.y, mob.z));
+                }
             }
             step_mob(shared, &players, mob, tick);
         }
@@ -111,11 +127,14 @@ pub fn tick(shared: &Arc<Shared>, tick: u64, is_night: bool) {
                 if (xa - xb).powi(2) + (za - zb).powi(2) < 64.0 {
                     used.insert(ea);
                     used.insert(eb);
+                    // Both parents enter a 5-minute breeding cooldown.
                     if let Some(m) = guard.get_mut(&ea) {
                         m.in_love = 0;
+                        m.breed_cooldown = 6000;
                     }
                     if let Some(m) = guard.get_mut(&eb) {
                         m.in_love = 0;
+                        m.breed_cooldown = 6000;
                     }
                     babies.push((ka, (xa + xb) / 2.0, ya, (za + zb) / 2.0));
                     break;
@@ -126,6 +145,11 @@ pub fn tick(shared: &Arc<Shared>, tick: u64, is_night: bool) {
 
     for (kind, x, y, z) in babies {
         spawn_baby(shared, kind, x, y, z);
+    }
+    // Push updated metadata for animals that just grew up: explicitly clear the
+    // is-baby flag (the regular metadata only emits it while true).
+    for id in grown {
+        shared.broadcast(cb::entity_metadata(id, &[cb::Meta::Bool(16, false)]));
     }
     if !remove.is_empty() {
         for id in &remove {
@@ -418,6 +442,7 @@ fn spawn_baby(shared: &Arc<Shared>, kind: MobKind, x: f64, y: f64, z: f64) {
     let heading = rand::thread_rng().gen::<f32>() * std::f32::consts::TAU;
     let mut mob = Mob::new(entity_id, kind, x, y, z, heading);
     mob.baby = true;
+    mob.baby_age = 24_000; // ~20 minutes to grow up, as in vanilla
     shared.broadcast(cb::spawn_entity(
         entity_id, mob.uuid, kind.type_id(), x, y, z, mob.yaw, mob.pitch, mob.yaw, 0, (0, 0, 0),
     ));

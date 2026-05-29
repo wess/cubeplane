@@ -54,6 +54,35 @@ impl MobKind {
         self.row().attack
     }
 
+    /// The item names that put this animal into love mode (breeding). Empty for
+    /// mobs that can't be bred. Matches Minecraft 1.20.1 feeding rules.
+    pub fn breeding_food(self) -> &'static [&'static str] {
+        match self.name() {
+            "cow" | "mooshroom" | "sheep" | "goat" => &["wheat"],
+            "pig" => &["carrot", "potato", "beetroot"],
+            "chicken" => &["wheat_seeds", "beetroot_seeds", "melon_seeds", "pumpkin_seeds"],
+            "rabbit" => &["carrot", "golden_carrot", "dandelion"],
+            "wolf" => &["beef", "porkchop", "chicken", "mutton", "rabbit", "cooked_beef", "cooked_porkchop", "cooked_chicken", "cooked_mutton", "cooked_rabbit"],
+            "cat" | "ocelot" => &["cod", "salmon"],
+            "horse" | "donkey" => &["golden_apple", "golden_carrot"],
+            "llama" | "trader_llama" => &["hay_block"],
+            "turtle" => &["seagrass"],
+            "panda" => &["bamboo"],
+            "fox" => &["sweet_berries", "glow_berries"],
+            "bee" => &["dandelion", "poppy", "blue_orchid", "allium", "azure_bluet", "cornflower"],
+            "axolotl" => &["tropical_fish_bucket"],
+            "frog" => &["slime_ball"],
+            "strider" => &["warped_fungus"],
+            "hoglin" => &["crimson_fungus"],
+            _ => &[],
+        }
+    }
+
+    /// Whether this animal can be bred by feeding.
+    pub fn can_breed(self) -> bool {
+        !self.breeding_food().is_empty()
+    }
+
     /// Parse a kind from its lowercase name.
     pub fn from_name(name: &str) -> Option<MobKind> {
         let key = name.strip_prefix("minecraft:").unwrap_or(name);
@@ -140,8 +169,12 @@ pub struct Mob {
     pub variant: u8,
     /// Whether this is a baby animal.
     pub baby: bool,
+    /// Ticks until a baby grows into an adult (0 once grown).
+    pub baby_age: u32,
     /// Ticks remaining in "love mode" for breeding (0 = not breeding).
     pub in_love: u32,
+    /// Ticks before this animal can breed again.
+    pub breed_cooldown: u32,
     /// Ticks until the mob may attack again.
     pub attack_cooldown: u32,
     /// Ticks remaining to play the death animation before removal; `None`
@@ -165,7 +198,9 @@ impl Mob {
             heading,
             variant: 0,
             baby: false,
+            baby_age: 0,
             in_love: 0,
+            breed_cooldown: 0,
             attack_cooldown: 0,
             dying: None,
         }
@@ -207,5 +242,23 @@ mod tests {
         let m = Mob::new(7, pig, 0.0, 64.0, 0.0, 0.0);
         assert!(m.alive());
         assert_eq!(m.health, pig.max_health());
+        assert!(!m.baby);
+        assert_eq!(m.breed_cooldown, 0);
+    }
+
+    #[test]
+    fn breeding_food_is_species_specific() {
+        let cow = MobKind::from_name("cow").unwrap();
+        let pig = MobKind::from_name("pig").unwrap();
+        let chicken = MobKind::from_name("chicken").unwrap();
+        let zombie = MobKind::from_name("zombie").unwrap();
+        assert!(cow.breeding_food().contains(&"wheat"));
+        assert!(pig.breeding_food().contains(&"carrot"));
+        assert!(!pig.breeding_food().contains(&"wheat"));
+        assert!(chicken.breeding_food().contains(&"wheat_seeds"));
+        assert!(cow.can_breed());
+        // Hostile mobs can't be bred.
+        assert!(!zombie.can_breed());
+        assert!(zombie.breeding_food().is_empty());
     }
 }
