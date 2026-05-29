@@ -50,6 +50,11 @@ pub fn damage_player(shared: &Arc<Shared>, player: &Player, amount: f32, cause: 
         player.send(cb::death_combat_event(player.entity_id, &msg));
         shared.broadcast(cb::system_chat(&text::colored(format!("{} {}", player.name, cause), "red"), false));
 
+        // Big red "You Died" title for the victim.
+        player.send(cb::title_times(5, 60, 20));
+        player.send(cb::title_subtitle(&text::colored(cause, "gray")));
+        player.send(cb::title_text(&text::colored("You Died", "red")));
+
         // Drop the player's items unless keepInventory is enabled.
         if !shared.config.world.keep_inventory {
             let s = player.state();

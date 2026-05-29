@@ -582,6 +582,29 @@ pub fn declare_commands(names: &[&str]) -> BytesMut {
     b
 }
 
+/// Show a big title text.
+pub fn title_text(text: &Json) -> BytesMut {
+    let mut b = pkt(play_cb::SET_TITLE_TEXT);
+    b.write_string(&text.to_string());
+    b
+}
+
+/// Show subtitle text (paired with [`title_text`]).
+pub fn title_subtitle(text: &Json) -> BytesMut {
+    let mut b = pkt(play_cb::SET_TITLE_SUBTITLE);
+    b.write_string(&text.to_string());
+    b
+}
+
+/// Set title fade-in / stay / fade-out times (ticks).
+pub fn title_times(fade_in: i32, stay: i32, fade_out: i32) -> BytesMut {
+    let mut b = pkt(play_cb::SET_TITLE_TIME);
+    b.write_i32(fade_in);
+    b.write_i32(stay);
+    b.write_i32(fade_out);
+    b
+}
+
 /// Set the tab list header and footer (JSON text components).
 pub fn tab_list_header(header: &Json, footer: &Json) -> BytesMut {
     let mut b = pkt(play_cb::TAB_LIST_HEADER);
