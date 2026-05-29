@@ -7,10 +7,13 @@
 
 mod clientbound;
 mod codec;
+mod combat;
 mod config;
 mod connection;
 mod control;
+mod entity;
 mod ids;
+mod mobs;
 mod mod_actions;
 mod player;
 mod registry;
@@ -107,9 +110,17 @@ async fn game_loop(shared: Arc<Shared>) {
         interval.tick().await;
         ticks += 1;
 
+        // Mob spawning and AI run every tick.
+        mobs::tick(&shared, ticks);
+
         // One mod tick per second keeps the JS bridge lightly loaded.
         if ticks.is_multiple_of(20) {
             shared.fire_mod(ModEvent::Tick { tick: ticks / 20 });
+        }
+
+        // Natural health regeneration every four seconds.
+        if ticks.is_multiple_of(80) {
+            combat::regenerate(&shared);
         }
 
         // Keep-alive and world time every 10 seconds.

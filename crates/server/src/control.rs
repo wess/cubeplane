@@ -87,6 +87,7 @@ fn status_value(shared: &Arc<Shared>) -> Value {
         "motd": shared.config.server.motd,
         "online": shared.player_count(),
         "max": shared.config.server.max_players,
+        "mobCount": shared.mob_count(),
         "uptimeSecs": shared.uptime_secs(),
         "totalJoins": shared.total_joins(),
         "generator": shared.world.lock().unwrap().generator_name(),

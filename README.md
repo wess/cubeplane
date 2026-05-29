@@ -37,6 +37,14 @@ workspace of focused crates that snap together.
 - **World generation** — superflat or smooth value-noise terrain (no external
   noise crates), with paletted chunk sections, heightmaps and full skylight.
 - **Multiplayer** — players see each other move, chat, and build in real time.
+- **Mobs & AI** — zombies, skeletons, spiders, creepers, pigs, cows, sheep and
+  chickens spawn around players, wander with gravity, and hostile mobs chase
+  and attack.
+- **Combat & vitals** — health/food HUD, melee both ways (players hit mobs,
+  mobs hit players), knockback, hurt and death animations, natural health
+  regeneration.
+- **Death & respawn** — fall and void damage, the death screen, and a full
+  respawn that rebuilds the player's world view.
 - **Building** — break and place blocks from a 9-slot hotbar, with proper
   block-change acknowledgement.
 - **Chat & commands** — `/help`, `/list`, `/pos`, `/tp`, plus any mod commands.

@@ -57,6 +57,7 @@ export const dashboard = (): string => /* html */ `<!doctype html>
   <div class="grid">
     <div class="card"><h2>Players</h2><div class="stat"><span id="online">–</span><small>/<span id="max">–</span></small></div></div>
     <div class="card"><h2>Uptime</h2><div class="stat" id="uptime">–</div></div>
+    <div class="card"><h2>Mobs</h2><div class="stat" id="mobs">–</div></div>
     <div class="card"><h2>Generator</h2><div class="stat" id="generator" style="font-size:18px">–</div></div>
     <div class="card"><h2>Total joins</h2><div class="stat" id="joins">–</div></div>
   </div>
@@ -107,6 +108,7 @@ async function refresh() {
     $("online").textContent = st.online;
     $("max").textContent = st.max;
     $("uptime").textContent = fmtUptime(st.uptimeSecs);
+    $("mobs").textContent = st.mobCount ?? 0;
     $("generator").textContent = st.generator;
     $("joins").textContent = st.totalJoins;
     $("mods").innerHTML = (st.mods && st.mods.length)

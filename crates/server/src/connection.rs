@@ -16,6 +16,8 @@ use cubeplane_protocol::{ProtoRead, RawPacket, PROTOCOL_VERSION};
 
 use crate::clientbound as cb;
 use crate::codec::{read_frame, write_frame, NO_COMPRESSION};
+use crate::combat;
+use crate::mobs;
 use crate::ids::{login_sb, status_sb};
 use crate::player::{offline_uuid, Player};
 use crate::serverbound::{self, Play};
@@ -171,6 +173,7 @@ async fn play(
     player.send(cb::set_held_item(0));
     player.send(cb::spawn_position(spawn.0 as i32, spawn.1 as i32, spawn.2 as i32, 0.0));
     player.send(cb::sync_position(spawn.0, spawn.1, spawn.2, 0.0, 0.0, 0, 0));
+    player.send(cb::update_health(20.0, 20, 5.0));
     // "Start waiting for level chunks" so the client renders the world.
     player.send(cb::game_event(13, 0.0));
 
@@ -205,6 +208,13 @@ async fn play(
         entity_id,
         cb::spawn_player(entity_id, uuid, spawn.0, spawn.1, spawn.2, 0.0, 0.0),
     );
+
+    // Show the newcomer every mob already roaming the world.
+    for m in shared.mobs() {
+        player.send(cb::spawn_entity(
+            m.entity_id, m.uuid, m.kind.type_id(), m.x, m.y, m.z, m.yaw, m.pitch, m.yaw, 0, (0, 0, 0),
+        ));
+    }
 
     // Announce + notify mods.
     let join_msg = text::system_notice(format!("{name} joined the cubeplane"));
@@ -261,6 +271,7 @@ async fn play_loop(
                     s.on_ground = on_ground;
                 });
                 broadcast_move(shared, player);
+                check_environment(shared, player);
                 maybe_stream(shared, player, loaded, last_center);
             }
             Play::SetPositionRotation { x, y, z, yaw, pitch, on_ground } => {
@@ -273,6 +284,7 @@ async fn play_loop(
                     s.on_ground = on_ground;
                 });
                 broadcast_move(shared, player);
+                check_environment(shared, player);
                 maybe_stream(shared, player, loaded, last_center);
             }
             Play::SetRotation { yaw, pitch, on_ground } => {
@@ -307,6 +319,16 @@ async fn play_loop(
             Play::BlockPlace { x, y, z, face, sequence } => {
                 place_block(shared, player, x, y, z, face);
                 player.send(cb::acknowledge_block_change(sequence));
+            }
+            Play::UseEntity { target, interaction } => {
+                if interaction == 1 && !player.is_dead() {
+                    mobs::player_attack(shared, player, target);
+                }
+            }
+            Play::ClientCommand { action } => {
+                if action == 0 {
+                    respawn_player(shared, player, loaded, last_center);
+                }
             }
             Play::TeleportConfirm { .. }
             | Play::KeepAlive { .. }
@@ -390,6 +412,94 @@ fn stream_chunks(
         player.send(cb::unload_chunk(x, z));
         loaded.remove(&(x, z));
     }
+}
+
+/// Apply fall and void damage based on the player's latest position.
+fn check_environment(shared: &Arc<Shared>, player: &Player) {
+    let s = player.state();
+    if s.dead {
+        return;
+    }
+
+    // Void: below the world kills in any mode.
+    if s.y < cubeplane_world::chunk::MIN_Y as f64 - 0.5 {
+        combat::damage_player(shared, player, 4.0, "fell out of the world");
+        return;
+    }
+
+    // Fall damage applies outside creative.
+    if player.gamemode == 1 {
+        return;
+    }
+    if s.on_ground {
+        let fall = player.update(|st| {
+            let f = st.fall_peak_y - st.y;
+            st.fall_peak_y = st.y;
+            f
+        });
+        let damage = (fall - 3.0).floor();
+        if damage > 0.0 {
+            combat::damage_player(shared, player, damage as f32, "hit the ground too hard");
+        }
+    } else {
+        player.update(|st| {
+            if st.y > st.fall_peak_y {
+                st.fall_peak_y = st.y;
+            }
+        });
+    }
+}
+
+/// Revive the player and rebuild their world view after death.
+fn respawn_player(
+    shared: &Arc<Shared>,
+    player: &Player,
+    loaded: &mut HashSet<(i32, i32)>,
+    last_center: &mut (i32, i32),
+) {
+    combat::revive(player);
+    let spawn = shared.world.lock().unwrap().spawn();
+    let is_flat = shared.world.lock().unwrap().generator_name() == "flat";
+    player.update(|s| {
+        s.x = spawn.0;
+        s.y = spawn.1;
+        s.z = spawn.2;
+        s.fall_peak_y = spawn.1;
+    });
+
+    let gamemode = player.gamemode as u8;
+    player.send(cb::respawn(gamemode, is_flat));
+    let abilities = if shared.config.is_creative() { 0x0D } else { 0x00 };
+    player.send(cb::player_abilities(abilities, 0.05, 0.1));
+    player.send(cb::set_held_item(0));
+    player.send(cb::spawn_position(spawn.0 as i32, spawn.1 as i32, spawn.2 as i32, 0.0));
+    player.send(cb::sync_position(spawn.0, spawn.1, spawn.2, 0.0, 0.0, 0, 0));
+
+    let (cx, cz) = (
+        (spawn.0.floor() as i32).div_euclid(16),
+        (spawn.2.floor() as i32).div_euclid(16),
+    );
+    player.send(cb::set_center_chunk(cx, cz));
+    loaded.clear();
+    stream_chunks(shared, player, cx, cz, loaded);
+    *last_center = (cx, cz);
+    player.send(cb::game_event(13, 0.0));
+
+    // Respawn clears entities client-side: re-send other players and mobs.
+    for p in shared.players() {
+        if p.entity_id == player.entity_id {
+            continue;
+        }
+        let st = p.state();
+        player.send(cb::spawn_player(p.entity_id, p.uuid, st.x, st.y, st.z, st.yaw, st.pitch));
+        player.send(cb::entity_head_rotation(p.entity_id, st.yaw));
+    }
+    for m in shared.mobs() {
+        player.send(cb::spawn_entity(
+            m.entity_id, m.uuid, m.kind.type_id(), m.x, m.y, m.z, m.yaw, m.pitch, m.yaw, 0, (0, 0, 0),
+        ));
+    }
+    broadcast_move(shared, player);
 }
 
 fn break_block(shared: &Arc<Shared>, player: &Player, x: i32, y: i32, z: i32) {

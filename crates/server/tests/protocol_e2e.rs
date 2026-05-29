@@ -128,7 +128,8 @@ async fn login_then_play_join_sequence() {
     // Chunk Data (0x24) packet within a handful of frames.
     let mut saw_join = false;
     let mut saw_chunk = false;
-    for _ in 0..40 {
+    let mut saw_health = false;
+    for _ in 0..60 {
         let (id, _body) = read_frame(&mut conn).await;
         if id == 0x28 {
             saw_join = true;
@@ -136,10 +137,14 @@ async fn login_then_play_join_sequence() {
         if id == 0x24 {
             saw_chunk = true;
         }
-        if saw_join && saw_chunk {
+        if id == 0x57 {
+            saw_health = true;
+        }
+        if saw_join && saw_chunk && saw_health {
             break;
         }
     }
     assert!(saw_join, "did not receive Join Game packet");
     assert!(saw_chunk, "did not receive Chunk Data packet");
+    assert!(saw_health, "did not receive Set Health packet");
 }

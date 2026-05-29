@@ -12,6 +12,7 @@ use cubeplane_mods::ModRuntime;
 use cubeplane_world::{block, World};
 
 use crate::config::Config;
+use crate::entity::Mob;
 use crate::player::Player;
 
 /// The nine hotbar blocks players build with, slot 0..9.
@@ -32,6 +33,7 @@ pub struct Shared {
     pub config: Config,
     pub world: Mutex<World>,
     players: RwLock<HashMap<i32, Player>>,
+    pub(crate) mobs: RwLock<HashMap<i32, Mob>>,
     next_entity_id: AtomicI32,
     total_joins: AtomicU64,
     pub mods: Option<ModRuntime>,
@@ -44,6 +46,7 @@ impl Shared {
             config,
             world: Mutex::new(world),
             players: RwLock::new(HashMap::new()),
+            mobs: RwLock::new(HashMap::new()),
             next_entity_id: AtomicI32::new(1),
             total_joins: AtomicU64::new(0),
             mods,
@@ -75,6 +78,31 @@ impl Shared {
     /// Number of connected players.
     pub fn player_count(&self) -> usize {
         self.players.read().unwrap().len()
+    }
+
+    /// Register a mob in the world.
+    pub fn add_mob(&self, mob: Mob) {
+        self.mobs.write().unwrap().insert(mob.entity_id, mob);
+    }
+
+    /// Remove a mob by entity id.
+    pub fn remove_mob(&self, entity_id: i32) -> Option<Mob> {
+        self.mobs.write().unwrap().remove(&entity_id)
+    }
+
+    /// Snapshot of all live mobs.
+    pub fn mobs(&self) -> Vec<Mob> {
+        self.mobs.read().unwrap().values().cloned().collect()
+    }
+
+    /// Number of mobs currently in the world.
+    pub fn mob_count(&self) -> usize {
+        self.mobs.read().unwrap().len()
+    }
+
+    /// Mutate a mob in place under the table lock, returning the closure result.
+    pub fn with_mob<R>(&self, entity_id: i32, f: impl FnOnce(&mut Mob) -> R) -> Option<R> {
+        self.mobs.write().unwrap().get_mut(&entity_id).map(f)
     }
 
     /// Look up a player by (case-insensitive) name.

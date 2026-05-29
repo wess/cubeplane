@@ -250,6 +250,98 @@ pub fn spawn_player(entity_id: i32, uuid: Uuid, x: f64, y: f64, z: f64, yaw: f32
     b
 }
 
+/// Spawn a non-player entity (mob, projectile, …). `head_yaw` is the living
+/// entity's head yaw; `data` is type-specific spawn data (0 for most mobs).
+#[allow(clippy::too_many_arguments)]
+pub fn spawn_entity(
+    entity_id: i32,
+    uuid: Uuid,
+    type_id: i32,
+    x: f64,
+    y: f64,
+    z: f64,
+    yaw: f32,
+    pitch: f32,
+    head_yaw: f32,
+    data: i32,
+    velocity: (i16, i16, i16),
+) -> BytesMut {
+    let mut b = pkt(play_cb::SPAWN_ENTITY);
+    b.write_varint(entity_id);
+    b.write_uuid(uuid);
+    b.write_varint(type_id);
+    b.write_f64(x);
+    b.write_f64(y);
+    b.write_f64(z);
+    b.write_i8(angle_to_byte(pitch));
+    b.write_i8(angle_to_byte(yaw));
+    b.write_i8(angle_to_byte(head_yaw));
+    b.write_varint(data);
+    b.write_i16(velocity.0);
+    b.write_i16(velocity.1);
+    b.write_i16(velocity.2);
+    b
+}
+
+/// Entity Event (status). 2 = generic hurt, 3 = death animation.
+pub fn entity_status(entity_id: i32, status: i8) -> BytesMut {
+    let mut b = pkt(play_cb::ENTITY_STATUS);
+    b.write_i32(entity_id);
+    b.write_i8(status);
+    b
+}
+
+/// Play the hurt-flash animation on an entity, facing `yaw` (degrees).
+pub fn hurt_animation(entity_id: i32, yaw: f32) -> BytesMut {
+    let mut b = pkt(play_cb::HURT_ANIMATION);
+    b.write_varint(entity_id);
+    b.write_f32(yaw);
+    b
+}
+
+/// Set an entity's velocity (units of 1/8000 block per tick).
+pub fn entity_velocity(entity_id: i32, vx: i16, vy: i16, vz: i16) -> BytesMut {
+    let mut b = pkt(play_cb::ENTITY_VELOCITY);
+    b.write_varint(entity_id);
+    b.write_i16(vx);
+    b.write_i16(vy);
+    b.write_i16(vz);
+    b
+}
+
+/// Update the player's health, food and saturation HUD.
+pub fn update_health(health: f32, food: i32, saturation: f32) -> BytesMut {
+    let mut b = pkt(play_cb::UPDATE_HEALTH);
+    b.write_f32(health);
+    b.write_varint(food);
+    b.write_f32(saturation);
+    b
+}
+
+/// Show the death screen for a player entity with the given message JSON.
+pub fn death_combat_event(player_entity_id: i32, message: &Json) -> BytesMut {
+    let mut b = pkt(play_cb::DEATH_COMBAT_EVENT);
+    b.write_varint(player_entity_id);
+    b.write_string(&message.to_string());
+    b
+}
+
+/// Respawn the player into a (re)loaded world. `copy_metadata` keeps attributes.
+pub fn respawn(gamemode: u8, is_flat: bool) -> BytesMut {
+    let mut b = pkt(play_cb::RESPAWN);
+    b.write_string(registry::DIMENSION_TYPE);
+    b.write_string(registry::DIMENSION_NAME);
+    b.write_i64(0); // hashed seed
+    b.write_i8(gamemode as i8);
+    b.write_u8(255); // previous gamemode = -1 (none)
+    b.write_bool(false); // is debug
+    b.write_bool(is_flat);
+    b.write_bool(false); // copy metadata (false = full reset)
+    b.write_bool(false); // has death location
+    b.write_varint(0); // portal cooldown
+    b
+}
+
 pub fn remove_entities(ids: &[i32]) -> BytesMut {
     let mut b = pkt(play_cb::REMOVE_ENTITIES);
     b.write_varint(ids.len() as i32);

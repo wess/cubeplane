@@ -27,6 +27,10 @@ pub enum Play {
     /// Dig/break action. `status` 0 = start, 2 = finish (block broken).
     BlockDig { status: i32, x: i32, y: i32, z: i32, sequence: i32 },
     BlockPlace { x: i32, y: i32, z: i32, face: i32, sequence: i32 },
+    /// Client status command. `action` 0 = perform respawn, 1 = request stats.
+    ClientCommand { action: i32 },
+    /// Interact with an entity. `interaction` 0 = interact, 1 = attack.
+    UseEntity { target: i32, interaction: i32 },
     /// A serverbound packet we recognise the id of but do not act on.
     Ignored,
 }
@@ -65,6 +69,13 @@ pub fn parse_play(mut raw: RawPacket) -> Result<Play> {
         play_sb::FLYING => Play::OnGround { on_ground: b.read_bool()? },
         play_sb::HELD_ITEM_SLOT => Play::HeldItem { slot: b.read_i16()? },
         play_sb::ARM_ANIMATION => Play::Animation { hand: b.read_varint()? },
+        play_sb::CLIENT_COMMAND => Play::ClientCommand { action: b.read_varint()? },
+        play_sb::USE_ENTITY => {
+            let target = b.read_varint()?;
+            let interaction = b.read_varint()?;
+            // Remaining fields (cursor/hand/sneaking) are not needed here.
+            Play::UseEntity { target, interaction }
+        }
         play_sb::BLOCK_DIG => {
             let status = b.read_varint()?;
             let (x, y, z) = b.read_position()?;

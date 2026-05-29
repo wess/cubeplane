@@ -44,15 +44,22 @@ separate Configuration phase arrives in 1.20.2). cubeplane runs in offline mode
 
 | Id | Packet |
 | --- | --- |
+| `0x01` | Spawn Entity (mobs) |
 | `0x03` | Spawn Player |
 | `0x06` | Acknowledge Block Change |
 | `0x0a` | Block Update |
 | `0x1a` | Disconnect |
+| `0x1c` | Entity Event (hurt/death animation) |
 | `0x1e` | Unload Chunk |
 | `0x1f` | Game Event |
+| `0x21` | Hurt Animation |
 | `0x23` | Keep Alive |
 | `0x24` | Chunk Data and Update Light |
 | `0x28` | Login (Join Game) |
+| `0x38` | Death Combat Event |
+| `0x41` | Respawn |
+| `0x54` | Set Entity Velocity (knockback) |
+| `0x57` | Set Health |
 | `0x34` | Player Abilities |
 | `0x39` | Player Info Remove |
 | `0x3a` | Player Info Update |
@@ -80,6 +87,8 @@ separate Configuration phase arrives in 1.20.2). cubeplane runs in offline mode
 | `0x15` | Set Player Position and Rotation |
 | `0x16` | Set Player Rotation |
 | `0x17` | Set Player On Ground |
+| `0x07` | Client Command (respawn) |
+| `0x10` | Interact Entity (attack) |
 | `0x1d` | Player Action (dig) |
 | `0x28` | Set Held Item |
 | `0x2f` | Swing Arm |

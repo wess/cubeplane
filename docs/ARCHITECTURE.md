@@ -59,9 +59,15 @@ The engine proper:
 - `ids` / `clientbound` / `serverbound`: packet ids and (de)serializers.
 - `registry`: the dimension/biome/chat-type Login codec.
 - `connection`: the per-connection handshake → status/login → play lifecycle,
-  chunk streaming, movement relay, chat, commands and building.
+  chunk streaming, movement relay, chat, commands, building, combat, fall/void
+  damage and respawn.
+- `entity`: mob kinds (type ids, stats, hostility) and live `Mob` state.
+- `mobs`: spawning plus the AI tick — gravity, wandering, hostile chasing and
+  melee, knockback, death animations and despawning.
+- `combat`: shared damage/heal/death helpers used by fall damage, mob melee and
+  regeneration.
 - `state`: the `Arc<Shared>` everything hangs off — config, world, player
-  table, broadcast helpers, the mod bridge.
+  table, mob table, broadcast helpers, the mod bridge.
 - `control`: the HTTP + WebSocket admin API (axum).
 - `lib`: `run()` boots the world, mods, the 20 TPS game loop, the control API
   and the accept loop.

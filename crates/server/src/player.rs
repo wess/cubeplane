@@ -6,7 +6,7 @@ use bytes::BytesMut;
 use tokio::sync::mpsc::UnboundedSender;
 use uuid::Uuid;
 
-/// A mutable snapshot of where a player is and what they're holding.
+/// A mutable snapshot of where a player is, their vitals and what they hold.
 #[derive(Debug, Clone, Copy)]
 pub struct PlayerState {
     pub x: f64,
@@ -17,7 +17,20 @@ pub struct PlayerState {
     pub on_ground: bool,
     /// Selected hotbar slot (0..9).
     pub held_slot: u8,
+    /// Health in half-hearts (0..=20).
+    pub health: f32,
+    /// Food level (0..=20).
+    pub food: i32,
+    /// Food saturation.
+    pub saturation: f32,
+    /// True once health hit zero, until the player respawns.
+    pub dead: bool,
+    /// Highest Y reached since last touching the ground, for fall damage.
+    pub fall_peak_y: f64,
 }
+
+/// Maximum player health, in half-hearts.
+pub const MAX_HEALTH: f32 = 20.0;
 
 impl PlayerState {
     pub fn new(x: f64, y: f64, z: f64) -> Self {
@@ -29,6 +42,11 @@ impl PlayerState {
             pitch: 0.0,
             on_ground: true,
             held_slot: 0,
+            health: MAX_HEALTH,
+            food: 20,
+            saturation: 5.0,
+            dead: false,
+            fall_peak_y: y,
         }
     }
 
@@ -86,6 +104,11 @@ impl Player {
     /// Queue a packet payload (id + body) to be sent to this player.
     pub fn send(&self, payload: BytesMut) {
         let _ = self.sender.send(payload);
+    }
+
+    /// Whether the player is currently dead (awaiting respawn).
+    pub fn is_dead(&self) -> bool {
+        self.state().dead
     }
 }
 
