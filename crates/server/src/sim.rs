@@ -319,6 +319,8 @@ pub fn is_redstone(name: &str) -> bool {
 /// A block that emits redstone power.
 fn is_redstone_source(name: &str) -> bool {
     matches!(name, "redstone_wire" | "redstone_block" | "redstone_torch" | "redstone_wall_torch" | "lever")
+        || name.ends_with("_pressure_plate")
+        || name.ends_with("_button")
 }
 
 /// A block that reacts to redstone power: lamps light, doors/gates open.
@@ -359,7 +361,9 @@ pub fn redstone_update(shared: &Arc<Shared>, ox: i32, oy: i32, oz: i32) {
                     if block::prop_index(s, "lit") == Some(0) {
                         queue.push_back((x, y, z, 15));
                     }
-                } else if name == "lever" && block::prop_index(s, "powered") == Some(0) {
+                } else if (name == "lever" || name.ends_with("_pressure_plate") || name.ends_with("_button"))
+                    && block::prop_index(s, "powered") == Some(0)
+                {
                     queue.push_back((x, y, z, 15));
                 }
             }
@@ -430,7 +434,16 @@ fn powered_at(
 }
 
 fn is_source(state: &u16) -> bool {
-    matches!(block::name_of(*state), "redstone_block" | "redstone_torch" | "redstone_wall_torch" | "lever")
+    let name = block::name_of(*state);
+    match name {
+        "redstone_block" => true,
+        "redstone_torch" | "redstone_wall_torch" => block::prop_index(*state, "lit") == Some(0),
+        "lever" => block::prop_index(*state, "powered") == Some(0),
+        n if n.ends_with("_pressure_plate") || n.ends_with("_button") => {
+            block::prop_index(*state, "powered") == Some(0)
+        }
+        _ => false,
+    }
 }
 
 fn neighbors6(x: i32, y: i32, z: i32) -> [(i32, i32, i32); 6] {
@@ -442,6 +455,61 @@ fn neighbors6(x: i32, y: i32, z: i32) -> [(i32, i32, i32); 6] {
         (x, y, z + 1),
         (x, y, z - 1),
     ]
+}
+
+/// Detect players standing on pressure plates and power/unpower them, running a
+/// redstone update around each plate that changed.
+pub fn pressure_plate_tick(shared: &Arc<Shared>) {
+    use std::collections::HashSet;
+    // The plate a player presses is the block at their feet.
+    let mut now: HashSet<(u8, i32, i32, i32)> = HashSet::new();
+    for p in shared.players() {
+        let s = p.state();
+        let (x, y, z) = (s.x.floor() as i32, s.y.floor() as i32, s.z.floor() as i32);
+        let name = {
+            let mut w = shared.dim_world(s.dimension).lock().unwrap();
+            block::name_of(w.get_block(x, y, z))
+        };
+        if name.ends_with("_pressure_plate") {
+            now.insert((s.dimension, x, y, z));
+        }
+    }
+    let (pressed, released) = shared.update_pressed_plates(now);
+    for (dim, x, y, z) in pressed {
+        set_plate_powered(shared, dim, x, y, z, true);
+    }
+    for (dim, x, y, z) in released {
+        set_plate_powered(shared, dim, x, y, z, false);
+    }
+}
+
+/// Release buttons whose countdown has expired.
+pub fn button_tick(shared: &Arc<Shared>) {
+    for (dim, x, y, z) in shared.tick_buttons() {
+        set_plate_powered(shared, dim, x, y, z, false);
+    }
+}
+
+/// Set the `powered` property of a plate/button and refresh nearby redstone.
+fn set_plate_powered(shared: &Arc<Shared>, dim: u8, x: i32, y: i32, z: i32, on: bool) {
+    let updated = {
+        let mut w = shared.dim_world(dim).lock().unwrap();
+        let state = w.get_block(x, y, z);
+        let name = block::name_of(state);
+        if !(name.ends_with("_pressure_plate") || name.ends_with("_button")) {
+            return;
+        }
+        let want = block::with_prop(state, "powered", if on { 0 } else { 1 });
+        if want == state {
+            return;
+        }
+        w.set_block(x, y, z, want);
+        want
+    };
+    shared.broadcast(cb::block_update(x, y, z, updated));
+    if dim == 0 {
+        redstone_update(shared, x, y, z);
+    }
 }
 
 #[cfg(test)]
@@ -481,5 +549,21 @@ mod tests {
         let d = block::state_by_name("oak_door").unwrap();
         let opened = block::with_prop(d, "open", 0);
         assert_eq!(block::prop_index(opened, "open"), Some(0));
+    }
+
+    #[test]
+    fn plates_and_buttons_are_sources() {
+        assert!(is_redstone_source("stone_pressure_plate"));
+        assert!(is_redstone_source("oak_button"));
+        // A pressed plate reads as a power source; an unpressed one does not.
+        let p = block::state_by_name("stone_pressure_plate").unwrap();
+        let on = block::with_prop(p, "powered", 0);
+        let off = block::with_prop(p, "powered", 1);
+        assert!(is_source(&on));
+        assert!(!is_source(&off));
+        // An unlit redstone torch is a source; lit-state ordering is index 0.
+        let torch = block::state_by_name("redstone_torch").unwrap();
+        let lit = block::with_prop(torch, "lit", 0);
+        assert!(is_source(&lit));
     }
 }

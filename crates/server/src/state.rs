@@ -2,7 +2,7 @@
 //! mod runtime handle. Everything is reachable from connection tasks, the game
 //! loop and the control API through an `Arc<Shared>`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicI32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
@@ -22,6 +22,8 @@ pub const CONTAINER_SIZE: usize = 27;
 
 /// Primed TNT record: `(entity id, x, y, z, fuse ticks)`.
 type PrimedTnt = (i32, f64, f64, f64, u32);
+/// A button counting down to release: `(dim, x, y, z, ticks remaining)`.
+type ActiveButton = (u8, i32, i32, i32, u32);
 
 /// A furnace block entity: input/fuel/output plus cook & burn timers.
 #[derive(Clone, Default)]
@@ -79,6 +81,10 @@ pub struct Shared {
     fluid_queue: Mutex<std::collections::VecDeque<(i32, i32, i32)>>,
     /// Primed TNT: `(entity id, x, y, z, fuse ticks)`.
     primed_tnt: Mutex<Vec<PrimedTnt>>,
+    /// Pressure plates currently held down by an entity: `(dim, x, y, z)`.
+    pressed_plates: Mutex<HashSet<(u8, i32, i32, i32)>>,
+    /// Buttons counting down to release: `(dim, x, y, z, ticks remaining)`.
+    active_buttons: Mutex<Vec<ActiveButton>>,
     next_entity_id: AtomicI32,
     total_joins: AtomicU64,
     /// World time of day in ticks (0..24000), advanced by the game loop.
@@ -121,6 +127,8 @@ impl Shared {
             brewing: RwLock::new(HashMap::new()),
             fluid_queue: Mutex::new(std::collections::VecDeque::new()),
             primed_tnt: Mutex::new(Vec::new()),
+            pressed_plates: Mutex::new(HashSet::new()),
+            active_buttons: Mutex::new(Vec::new()),
             next_entity_id: AtomicI32::new(1),
             total_joins: AtomicU64::new(0),
             world_time: std::sync::atomic::AtomicI64::new(1000),
@@ -274,6 +282,47 @@ impl Shared {
             }
         });
         exploded
+    }
+
+    /// Replace the set of currently-pressed pressure plates, returning the
+    /// plates that just became pressed and those just released.
+    #[allow(clippy::type_complexity)]
+    pub fn update_pressed_plates(
+        &self,
+        now: HashSet<(u8, i32, i32, i32)>,
+    ) -> (Vec<(u8, i32, i32, i32)>, Vec<(u8, i32, i32, i32)>) {
+        let mut held = self.pressed_plates.lock().unwrap();
+        let pressed: Vec<_> = now.difference(&held).copied().collect();
+        let released: Vec<_> = held.difference(&now).copied().collect();
+        *held = now;
+        (pressed, released)
+    }
+
+    /// Start a button's release countdown.
+    pub fn press_button(&self, dim: u8, x: i32, y: i32, z: i32, ticks: u32) {
+        let mut b = self.active_buttons.lock().unwrap();
+        // Refresh the timer if the button is already counting down.
+        if let Some(e) = b.iter_mut().find(|e| e.0 == dim && e.1 == x && e.2 == y && e.3 == z) {
+            e.4 = ticks;
+        } else {
+            b.push((dim, x, y, z, ticks));
+        }
+    }
+
+    /// Tick button timers, returning buttons whose countdown just expired.
+    pub fn tick_buttons(&self) -> Vec<(u8, i32, i32, i32)> {
+        let mut b = self.active_buttons.lock().unwrap();
+        let mut released = Vec::new();
+        b.retain_mut(|(dim, x, y, z, ticks)| {
+            *ticks = ticks.saturating_sub(1);
+            if *ticks == 0 {
+                released.push((*dim, *x, *y, *z));
+                false
+            } else {
+                true
+            }
+        });
+        released
     }
 
     /// Ensure a furnace block entity exists at `pos`.

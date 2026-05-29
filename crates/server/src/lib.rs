@@ -337,6 +337,11 @@ async fn game_loop(shared: Arc<Shared>) {
         if ticks.is_multiple_of(5) {
             sim::fluid_tick(&shared);
         }
+        // Pressure plates and button timers update a few times a second.
+        if ticks.is_multiple_of(5) {
+            sim::pressure_plate_tick(&shared);
+        }
+        sim::button_tick(&shared);
         // Furnaces smelt and brewing stands brew every other tick.
         if ticks.is_multiple_of(2) {
             furnace::tick(&shared);

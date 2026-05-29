@@ -505,6 +505,7 @@ async fn play_loop<R: AsyncRead + Unpin>(
                 // Interacting with a lever/chest/sign takes priority over placing.
                 if !try_flint(shared, player, x, y, z, face)
                     && !try_toggle_lever(shared, player, x, y, z)
+                    && !try_use_button(shared, player, x, y, z)
                     && !try_use_door(shared, player, x, y, z)
                     && !try_use_bed(shared, player, x, y, z)
                     && !try_open_container(shared, player, x, y, z)
@@ -1061,6 +1062,35 @@ fn try_toggle_lever(shared: &Arc<Shared>, player: &Player, x: i32, y: i32, z: i3
     if dim == 0 {
         crate::sim::redstone_update(shared, x, y, z);
     }
+    true
+}
+
+/// Right-click a button to press it: power it now and schedule its release.
+fn try_use_button(shared: &Arc<Shared>, player: &Player, x: i32, y: i32, z: i32) -> bool {
+    let dim = player.state().dimension;
+    let state = { shared.dim_world(dim).lock().unwrap().get_block(x, y, z) };
+    let name = cubeplane_world::block::name_of(state);
+    if !name.ends_with("_button") {
+        return false;
+    }
+    // Already pressed: ignore (the timer will release it).
+    if cubeplane_world::block::prop_index(state, "powered") == Some(0) {
+        return true;
+    }
+    let pressed = cubeplane_world::block::with_prop(state, "powered", 0);
+    {
+        let mut w = shared.dim_world(dim).lock().unwrap();
+        w.set_block(x, y, z, pressed);
+    }
+    shared.broadcast(cb::block_update(x, y, z, pressed));
+    // Stone-family buttons stay down 20 ticks, wooden ones 30.
+    let stone = name == "stone_button" || name == "polished_blackstone_button";
+    shared.press_button(dim, x, y, z, if stone { 20 } else { 30 });
+    if dim == 0 {
+        crate::sim::redstone_update(shared, x, y, z);
+    }
+    let sound = if stone { "block.stone_button.click_on" } else { "block.wooden_button.click_on" };
+    shared.broadcast(cb::sound_effect(sound, 0, x as f64 + 0.5, y as f64 + 0.5, z as f64 + 0.5, 1.0, 1.0));
     true
 }
 
