@@ -254,42 +254,58 @@ fn step_mob(shared: &Arc<Shared>, players: &[Player], mob: &mut Mob, tick: u64) 
         None
     };
 
-    // Decide horizontal movement.
-    let (mut nx, mut nz) = (mob.x, mob.z);
-    if let Some((p, _)) = &target {
+    // Pick a base direction: straight at the target, or the wander heading.
+    let base_angle = if let Some((p, _)) = &target {
         let s = p.state();
-        let dx = s.x - mob.x;
-        let dz = s.z - mob.z;
-        let len = (dx * dx + dz * dz).sqrt().max(1e-6);
-        nx += dx / len * speed;
-        nz += dz / len * speed;
-        mob.yaw = dz.atan2(dx).to_degrees() as f32; // face the target
+        let a = (s.z - mob.z).atan2(s.x - mob.x);
+        mob.yaw = a.to_degrees() as f32; // always face the target
+        a
     } else {
         if tick.is_multiple_of(60) {
             mob.heading = rand::thread_rng().gen::<f32>() * std::f32::consts::TAU;
         }
-        nx += (mob.heading as f64).cos() * speed * 0.5;
-        nz += (mob.heading as f64).sin() * speed * 0.5;
-        mob.yaw = mob.heading.to_degrees();
-    }
+        mob.heading as f64
+    };
+    let step = if target.is_some() { speed } else { speed * 0.5 };
 
-    // Collision + gravity against the world.
+    // Move with obstacle avoidance: try the desired heading, then fan out to
+    // nearby angles so the mob walks around walls instead of into them.
     {
         let mut world = shared.world.lock().unwrap();
         let mut solid = |x: f64, y: f64, z: f64| {
             !block::is_air(world.get_block(x.floor() as i32, y.floor() as i32, z.floor() as i32))
         };
+        // 0 = straight ahead, then ±29°, ±57°, ±92°, and finally a U-turn.
+        let offsets = [0.0_f64, 0.5, -0.5, 1.0, -1.0, 1.6, -1.6, std::f64::consts::PI];
         let foot = mob.y;
-        if solid(nx, foot, nz) {
-            // Try to step up one block.
-            if !solid(nx, foot + 1.0, nz) && !solid(nx, foot + 2.0, nz) {
+        let mut moved = false;
+        for off in offsets {
+            let ang = base_angle + off;
+            let tx = mob.x + ang.cos() * step;
+            let tz = mob.z + ang.sin() * step;
+            if !solid(tx, foot, tz) {
+                mob.x = tx;
+                mob.z = tz;
+                moved = true;
+            } else if !solid(tx, foot + 1.0, tz) && !solid(tx, foot + 2.0, tz) {
+                // Step up a one-block ledge.
                 mob.y += 1.0;
-                mob.x = nx;
-                mob.z = nz;
+                mob.x = tx;
+                mob.z = tz;
+                moved = true;
             }
-        } else {
-            mob.x = nx;
-            mob.z = nz;
+            if moved {
+                // A wandering mob adopts whatever heading it could actually take.
+                if target.is_none() {
+                    mob.heading = ang as f32;
+                    mob.yaw = ang.to_degrees() as f32;
+                }
+                break;
+            }
+        }
+        // Boxed in while wandering: choose a fresh heading next time.
+        if !moved && target.is_none() {
+            mob.heading = rand::thread_rng().gen::<f32>() * std::f32::consts::TAU;
         }
 
         // Gravity: fall until something solid is underfoot.
