@@ -348,7 +348,10 @@ fn try_spawn(shared: &Arc<Shared>, players: &[Player], is_night: bool) {
     let kind = MobKind::random(&mut rng, !allow_hostiles);
     let entity_id = shared.next_entity_id();
     let heading = rng.gen::<f32>() * std::f32::consts::TAU;
-    let mob = Mob::new(entity_id, kind, sx, y as f64, sz, heading);
+    let mut mob = Mob::new(entity_id, kind, sx, y as f64, sz, heading);
+    if kind.name() == "sheep" {
+        mob.variant = rng.gen_range(0..16);
+    }
 
     shared.broadcast(cb::spawn_entity(
         entity_id,
@@ -363,6 +366,10 @@ fn try_spawn(shared: &Arc<Shared>, players: &[Player], is_night: bool) {
         0,
         (0, 0, 0),
     ));
+    let meta = mob.metadata();
+    if !meta.is_empty() {
+        shared.broadcast(cb::entity_metadata(entity_id, &meta));
+    }
     shared.add_mob(mob);
     if kind.name() == "villager" {
         villager_spawned(shared, entity_id);

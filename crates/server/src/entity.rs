@@ -134,6 +134,8 @@ pub struct Mob {
     pub on_ground: bool,
     /// Current wander heading in radians (when not chasing).
     pub heading: f32,
+    /// Cosmetic variant (e.g. sheep wool colour 0-15).
+    pub variant: u8,
     /// Ticks until the mob may attack again.
     pub attack_cooldown: u32,
     /// Ticks remaining to play the death animation before removal; `None`
@@ -155,8 +157,17 @@ impl Mob {
             health: kind.max_health(),
             on_ground: false,
             heading,
+            variant: 0,
             attack_cooldown: 0,
             dying: None,
+        }
+    }
+
+    /// Cosmetic metadata for this mob (e.g. sheep wool colour), if any.
+    pub fn metadata(&self) -> Vec<crate::clientbound::Meta> {
+        match self.kind.name() {
+            "sheep" => vec![crate::clientbound::Meta::Byte(17, (self.variant & 0x0f) as i8)],
+            _ => Vec::new(),
         }
     }
 

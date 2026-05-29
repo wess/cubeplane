@@ -345,6 +345,10 @@ where
         player.send(cb::spawn_entity(
             m.entity_id, m.uuid, m.kind.type_id(), m.x, m.y, m.z, m.yaw, m.pitch, m.yaw, 0, (0, 0, 0),
         ));
+        let meta = m.metadata();
+        if !meta.is_empty() {
+            player.send(cb::entity_metadata(m.entity_id, &meta));
+        }
         if ai_on && m.kind.name() == "villager" {
             if let Some((name, prof)) = shared.villager_identity(m.entity_id) {
                 player.send(cb::entity_custom_name(m.entity_id, &text::colored(format!("{name} the {prof}"), "green")));
@@ -602,11 +606,13 @@ fn stream_chunks(
     let mut to_send: Vec<(i32, i32)> = wanted.difference(loaded).copied().collect();
     to_send.sort_by_key(|(x, z)| (x - cx).pow(2) + (z - cz).pow(2));
     for (x, z) in to_send {
-        let payload = {
+        // Clone the column under a brief lock, then do the expensive palette +
+        // lighting encode *outside* the global world lock to cut contention.
+        let chunk = {
             let mut world = shared.world.lock().unwrap();
-            cb::chunk_data(world.chunk(x, z))
+            world.chunk(x, z).clone()
         };
-        player.send(payload);
+        player.send(cb::chunk_data(&chunk));
         loaded.insert((x, z));
     }
 

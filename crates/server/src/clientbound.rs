@@ -496,6 +496,47 @@ pub fn set_slot(window_id: i8, state_id: i32, slot: i16, item: ItemStack) -> Byt
     b
 }
 
+/// A single entity-metadata entry (index + typed value).
+pub enum Meta {
+    Byte(u8, i8),
+    VarInt(u8, i32),
+    Float(u8, f32),
+    Bool(u8, bool),
+}
+
+/// Set arbitrary entity metadata (variants, flags, …). Entry types match the
+/// 1.20.1 metadata type ids: 0=byte, 1=varint, 3=float, 8=boolean.
+pub fn entity_metadata(entity_id: i32, entries: &[Meta]) -> BytesMut {
+    let mut b = pkt(play_cb::ENTITY_METADATA);
+    b.write_varint(entity_id);
+    for e in entries {
+        match e {
+            Meta::Byte(i, v) => {
+                b.write_u8(*i);
+                b.write_varint(0);
+                b.write_i8(*v);
+            }
+            Meta::VarInt(i, v) => {
+                b.write_u8(*i);
+                b.write_varint(1);
+                b.write_varint(*v);
+            }
+            Meta::Float(i, v) => {
+                b.write_u8(*i);
+                b.write_varint(3);
+                b.write_f32(*v);
+            }
+            Meta::Bool(i, v) => {
+                b.write_u8(*i);
+                b.write_varint(8);
+                b.write_bool(*v);
+            }
+        }
+    }
+    b.write_u8(0xff); // end of metadata
+    b
+}
+
 /// Give an entity a visible custom name (floating nameplate). Uses metadata
 /// index 2 (optional chat component) + index 3 (name visible bool).
 pub fn entity_custom_name(entity_id: i32, name: &Json) -> BytesMut {
