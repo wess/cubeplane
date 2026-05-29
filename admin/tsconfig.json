@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "types": ["bun-types"],
+    "strict": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": false,
+    "baseUrl": ".",
+    "paths": {
+      "@atlas/server": ["./node_modules/atlas/packages/server/index.ts"],
+      "@atlas/server/*": ["./node_modules/atlas/packages/server/*"],
+      "@atlas/*": ["./node_modules/atlas/packages/*/index.ts"]
+    }
+  },
+  "include": ["src/**/*.ts"]
+}
