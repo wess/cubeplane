@@ -100,7 +100,10 @@ fn chat_json(text: &str) -> String {
 /// `completed` as achieved. `protocol` selects the body layout: 1.20.2 (764)
 /// dropped the per-advancement `criteria` array.
 pub fn packet(completed: &[&str], protocol: i32) -> BytesMut {
-    let include_criteria = protocol < 764;
+    // 1.20.2 (764) dropped the per-advancement `criteria` array; the
+    // `sendsTelemetryData` boolean exists from 1.20 (763) onward (not in 1.19.x).
+    let include_criteria = protocol != 764;
+    let include_telemetry = protocol >= 763;
     let mut b = pkt(play_cb::UPDATE_ADVANCEMENTS);
     b.write_bool(true); // reset/clear before applying
 
@@ -149,8 +152,10 @@ pub fn packet(completed: &[&str], protocol: i32) -> BytesMut {
         b.write_varint(1); // one requirement group
         b.write_varint(1); // one criterion in the group
         b.write_string(crit);
-        // sendsTelemetryData (present in protocol 763 and 764).
-        b.write_bool(false);
+        // sendsTelemetryData (1.20+ only).
+        if include_telemetry {
+            b.write_bool(false);
+        }
     }
 
     // Removed advancements: none.

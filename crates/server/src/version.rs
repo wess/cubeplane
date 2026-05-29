@@ -43,9 +43,15 @@ pub fn translate_clientbound(payload: BytesMut, protocol: i32) -> BytesMut {
 /// target protocol's. Returns `Some(new_body)` when a rewrite applied, `None`
 /// when the body is already wire-compatible.
 fn rewrite_clientbound_body(canonical_id: i32, protocol: i32, body: &[u8]) -> Option<Vec<u8>> {
-    if protocol != PROTO_1_20_2 {
-        return None;
+    match protocol {
+        PROTO_1_20_2 => rewrite_clientbound_body_764(canonical_id, body),
+        PROTO_1_19_4 => rewrite_clientbound_body_762(canonical_id, body),
+        _ => None,
     }
+}
+
+/// Body rewrites for clientbound play packets, 763 → 1.20.2.
+fn rewrite_clientbound_body_764(canonical_id: i32, body: &[u8]) -> Option<Vec<u8>> {
     match canonical_id {
         // login / Join Game (763 0x28): reorder fields, drop the inline codec
         // (sent during the Configuration phase in 1.20.2), add doLimitedCrafting.
@@ -76,13 +82,100 @@ fn rewrite_clientbound_body(canonical_id: i32, protocol: i32, body: &[u8]) -> Op
     }
 }
 
+/// Body rewrites for clientbound play packets, 763 → 1.19.4. (Play packet ids are
+/// identical between the two, so only bodies change.)
+fn rewrite_clientbound_body_762(canonical_id: i32, body: &[u8]) -> Option<Vec<u8>> {
+    match canonical_id {
+        // login / Join Game (0x28): 1.19.4 lacks the trailing portalCooldown.
+        0x28 => rewrite_login_763_to_762(body),
+        // update_light (0x25): 1.19.4 has a trustEdges bool after chunkX/chunkZ.
+        0x25 => {
+            let cz_end = varint_field_end(body, varint_field_end(body, 0)?)?;
+            let mut out = Vec::with_capacity(body.len() + 1);
+            out.extend_from_slice(&body[..cz_end]);
+            out.push(0x01); // trustEdges = true
+            out.extend_from_slice(&body[cz_end..]);
+            Some(out)
+        }
+        // map_chunk (0x24): 1.19.4 has a trustEdges bool after the blockEntities
+        // array (i.e. after x, z, heightmaps NBT, chunkData buffer, blockEntities).
+        0x24 => {
+            let pos = map_chunk_block_entities_end(body)?;
+            let mut out = Vec::with_capacity(body.len() + 1);
+            out.extend_from_slice(&body[..pos]);
+            out.push(0x01); // trustEdges = true
+            out.extend_from_slice(&body[pos..]);
+            Some(out)
+        }
+        _ => None,
+    }
+}
+
+/// Byte offset just past a varint starting at `at` (update_light's chunkX/chunkZ
+/// are varints in 763).
+fn varint_field_end(buf: &[u8], at: usize) -> Option<usize> {
+    let mut i = at;
+    loop {
+        let b = *buf.get(i)?;
+        i += 1;
+        if b & 0x80 == 0 {
+            return Some(i);
+        }
+    }
+}
+
+/// Byte offset just past the blockEntities array in a 763 map_chunk body.
+fn map_chunk_block_entities_end(body: &[u8]) -> Option<usize> {
+    use cubeplane_protocol::ProtoRead;
+    let mut r = BytesMut::from(body);
+    let total = r.len();
+    let _x = r.read_i32().ok()?;
+    let _z = r.read_i32().ok()?;
+    let hm = named_root_nbt_to_anonymous(&r, &mut Vec::new())?;
+    let _ = r.split_to(hm);
+    let chunk_data_len = r.read_varint().ok()? as usize;
+    let _ = r.split_to(chunk_data_len);
+    let count = r.read_varint().ok()?;
+    for _ in 0..count {
+        // chunkBlockEntity: packedXZ u8, y i16, type varint, nbt (anonymousNbt).
+        let _ = r.read_u8().ok()?;
+        let _ = r.read_i16().ok()?;
+        let _ = r.read_varint().ok()?;
+        let n = named_root_nbt_to_anonymous(&r, &mut Vec::new())?;
+        let _ = r.split_to(n);
+    }
+    Some(total - r.len())
+}
+
 /// Rewrite the 763 Join Game body into the 1.20.2 layout: the dimension codec is
 /// removed (it ships in the Configuration phase), `doLimitedCrafting` is added,
 /// and several fields are reordered.
-fn rewrite_login_763_to_764(body: &[u8]) -> Option<Vec<u8>> {
-    use cubeplane_protocol::{ProtoRead, ProtoWrite};
+/// The fields of a canonical 763 Join Game packet, including the raw codec bytes
+/// (so downgrade targets that keep the inline codec can re-emit it).
+struct ParsedLogin {
+    entity_id: i32,
+    hardcore: bool,
+    game_mode: u8,
+    prev_game_mode: i8,
+    worlds: Vec<String>,
+    codec: Vec<u8>,
+    world_type: String,
+    world_name: String,
+    hashed_seed: i64,
+    max_players: i32,
+    view_distance: i32,
+    sim_distance: i32,
+    reduced_debug: bool,
+    respawn_screen: bool,
+    is_debug: bool,
+    is_flat: bool,
+    has_death: bool,
+    portal_cooldown: i32,
+}
+
+fn parse_763_login(body: &[u8]) -> Option<ParsedLogin> {
+    use cubeplane_protocol::ProtoRead;
     let mut r = BytesMut::from(body);
-    // --- read the 763 layout ---
     let entity_id = r.read_i32().ok()?;
     let hardcore = r.read_bool().ok()?;
     let game_mode = r.read_u8().ok()?;
@@ -92,9 +185,9 @@ fn rewrite_login_763_to_764(body: &[u8]) -> Option<Vec<u8>> {
     for _ in 0..world_count {
         worlds.push(r.read_string().ok()?);
     }
-    // Skip the inline dimension codec (a named root NBT compound).
+    // The inline dimension codec is a named root NBT compound; capture its bytes.
     let codec_len = named_root_nbt_to_anonymous(&r, &mut Vec::new())?;
-    let _ = r.split_to(codec_len);
+    let codec = r.split_to(codec_len).to_vec();
     let world_type = r.read_string().ok()?;
     let world_name = r.read_string().ok()?;
     let hashed_seed = r.read_i64().ok()?;
@@ -106,32 +199,71 @@ fn rewrite_login_763_to_764(body: &[u8]) -> Option<Vec<u8>> {
     let is_debug = r.read_bool().ok()?;
     let is_flat = r.read_bool().ok()?;
     let has_death = r.read_bool().ok()?;
-    // (763 has no death payload when has_death is false, matching our builder.)
     let portal_cooldown = r.read_varint().ok()?;
+    Some(ParsedLogin {
+        entity_id, hardcore, game_mode, prev_game_mode, worlds, codec, world_type,
+        world_name, hashed_seed, max_players, view_distance, sim_distance,
+        reduced_debug, respawn_screen, is_debug, is_flat, has_death, portal_cooldown,
+    })
+}
 
-    // --- write the 764 layout ---
+/// 763 → 1.20.2: reorder fields, drop the inline codec (it ships in the
+/// Configuration phase), add `doLimitedCrafting`.
+fn rewrite_login_763_to_764(body: &[u8]) -> Option<Vec<u8>> {
+    use cubeplane_protocol::ProtoWrite;
+    let p = parse_763_login(body)?;
     let mut o = BytesMut::new();
-    o.write_i32(entity_id);
-    o.write_bool(hardcore);
-    o.write_varint(world_count);
-    for w in &worlds {
+    o.write_i32(p.entity_id);
+    o.write_bool(p.hardcore);
+    o.write_varint(p.worlds.len() as i32);
+    for w in &p.worlds {
         o.write_string(w);
     }
-    o.write_varint(max_players);
-    o.write_varint(view_distance);
-    o.write_varint(sim_distance);
-    o.write_bool(reduced_debug);
-    o.write_bool(respawn_screen);
+    o.write_varint(p.max_players);
+    o.write_varint(p.view_distance);
+    o.write_varint(p.sim_distance);
+    o.write_bool(p.reduced_debug);
+    o.write_bool(p.respawn_screen);
     o.write_bool(false); // doLimitedCrafting (new in 1.20.2)
-    o.write_string(&world_type);
-    o.write_string(&world_name);
-    o.write_i64(hashed_seed);
-    o.write_u8(game_mode);
-    o.write_i8(prev_game_mode);
-    o.write_bool(is_debug);
-    o.write_bool(is_flat);
-    o.write_bool(has_death);
-    o.write_varint(portal_cooldown);
+    o.write_string(&p.world_type);
+    o.write_string(&p.world_name);
+    o.write_i64(p.hashed_seed);
+    o.write_u8(p.game_mode);
+    o.write_i8(p.prev_game_mode);
+    o.write_bool(p.is_debug);
+    o.write_bool(p.is_flat);
+    o.write_bool(p.has_death);
+    o.write_varint(p.portal_cooldown);
+    Some(o.to_vec())
+}
+
+/// 763 → 1.19.4: identical layout (codec stays inline) but without the trailing
+/// `portalCooldown` field, which 1.19.4 does not have.
+fn rewrite_login_763_to_762(body: &[u8]) -> Option<Vec<u8>> {
+    use cubeplane_protocol::ProtoWrite;
+    let p = parse_763_login(body)?;
+    let mut o = BytesMut::new();
+    o.write_i32(p.entity_id);
+    o.write_bool(p.hardcore);
+    o.write_u8(p.game_mode);
+    o.write_i8(p.prev_game_mode);
+    o.write_varint(p.worlds.len() as i32);
+    for w in &p.worlds {
+        o.write_string(w);
+    }
+    o.extend_from_slice(&p.codec);
+    o.write_string(&p.world_type);
+    o.write_string(&p.world_name);
+    o.write_i64(p.hashed_seed);
+    o.write_varint(p.max_players);
+    o.write_varint(p.view_distance);
+    o.write_varint(p.sim_distance);
+    o.write_bool(p.reduced_debug);
+    o.write_bool(p.respawn_screen);
+    o.write_bool(p.is_debug);
+    o.write_bool(p.is_flat);
+    o.write_bool(p.has_death);
+    // No portalCooldown in 1.19.4.
     Some(o.to_vec())
 }
 
@@ -174,6 +306,8 @@ fn remap_play_clientbound(canonical_id: i32, protocol: i32) -> i32 {
 
 /// Protocol number for Minecraft 1.20.2.
 const PROTO_1_20_2: i32 = 764;
+/// Protocol number for Minecraft 1.19.4.
+const PROTO_1_19_4: i32 = 762;
 
 // Verified play packet-id maps between protocol 763 (1.20.1) and 764 (1.20.2),
 // generated from PrismarineJS minecraft-data (pc/1.20 and pc/1.20.2). These cover
