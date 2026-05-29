@@ -1,0 +1,32 @@
+# cubeplane server configuration.
+# All keys are optional; omitted values fall back to the defaults shown here.
+
+[server]
+host = "0.0.0.0"
+port = 25565
+max_players = 20
+motd = "A cubeplane server — Rust engine, JS mods"
+# Square radius (in chunks) streamed around each player.
+view_distance = 8
+# Packet compression threshold in bytes; set to -1 to disable.
+compression_threshold = 256
+# One of: survival, creative, adventure, spectator.
+gamemode = "creative"
+
+[world]
+# One of: terrain (value-noise hills) or flat (superflat).
+generator = "terrain"
+seed = 24317
+
+[mods]
+enabled = true
+# Directory scanned for *.js mods at startup.
+dir = "mods"
+
+[control]
+# HTTP + WebSocket admin/control API consumed by the Atlas panel.
+enabled = true
+host = "127.0.0.1"
+port = 8080
+# Uncomment to require `Authorization: Bearer <token>` on the control API.
+# token = "change-me"
