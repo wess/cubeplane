@@ -550,6 +550,7 @@ async fn play_loop<R: AsyncRead + Unpin>(
                 player.update(|s| {
                     s.open_container = None;
                     s.open_merchant = false;
+                    s.merchant_prof = None;
                     s.open_furnace = None;
                     s.open_brewing = None;
                     s.open_crafting = false;
@@ -879,7 +880,7 @@ fn interact_entity(shared: &Arc<Shared>, player: &Player, target: i32) {
         if shared.ai_config().enabled {
             start_conversation(shared, player, target);
         } else {
-            open_merchant(player);
+            open_merchant(player, crate::ai::profession_for(target));
         }
         return;
     }
@@ -1015,30 +1016,97 @@ fn talk_to_villager(shared: &Arc<Shared>, player: &Player, villager: i32, messag
     });
 }
 
-/// The (fixed) villager trade offers: `(input, output, input2)`.
-fn merchant_offers() -> Vec<(item::ItemStack, item::ItemStack, item::ItemStack)> {
-    let emerald = item::id_any("emerald").unwrap_or(0);
-    let bread = item::id_any("bread").unwrap_or(0);
-    let stick = item::id_any("stick").unwrap_or(0);
-    vec![
-        (item::ItemStack::new(emerald, 1), item::ItemStack::new(bread, 6), item::ItemStack::EMPTY),
-        (item::ItemStack::new(stick, 32), item::ItemStack::new(emerald, 1), item::ItemStack::EMPTY),
-    ]
+/// Villager trade offers for a profession: `(input1, output, input2)`. Unknown
+/// items are dropped so the list always type-checks against the registry.
+fn merchant_offers(profession: &str) -> Vec<(item::ItemStack, item::ItemStack, item::ItemStack)> {
+    // Each entry is `(buy_name, buy_count, give_name, give_count)` describing a
+    // trade where the player hands over `buy` and receives `give`.
+    let raw: &[(&str, u8, &str, u8)] = match profession {
+        "farmer" => &[
+            ("wheat", 20, "emerald", 1),
+            ("emerald", 1, "bread", 6),
+            ("emerald", 1, "pumpkin_pie", 4),
+            ("carrot", 22, "emerald", 1),
+        ],
+        "librarian" => &[
+            ("paper", 24, "emerald", 1),
+            ("emerald", 9, "book", 1),
+            ("emerald", 1, "lantern", 1),
+            ("emerald", 5, "compass", 1),
+        ],
+        "blacksmith" => &[
+            ("coal", 15, "emerald", 1),
+            ("emerald", 4, "iron_pickaxe", 1),
+            ("emerald", 5, "shield", 1),
+            ("iron_ingot", 4, "emerald", 1),
+        ],
+        "cleric" => &[
+            ("rotten_flesh", 32, "emerald", 1),
+            ("emerald", 1, "redstone", 4),
+            ("emerald", 1, "lapis_lazuli", 4),
+            ("emerald", 3, "glowstone", 4),
+        ],
+        "cartographer" => &[
+            ("paper", 24, "emerald", 1),
+            ("emerald", 7, "compass", 1),
+            ("emerald", 1, "map", 1),
+        ],
+        "fisherman" => &[
+            ("string", 20, "emerald", 1),
+            ("emerald", 1, "cooked_cod", 6),
+            ("cod", 15, "emerald", 1),
+        ],
+        "fletcher" => &[
+            ("stick", 32, "emerald", 1),
+            ("emerald", 1, "arrow", 16),
+            ("flint", 26, "emerald", 1),
+            ("emerald", 2, "bow", 1),
+        ],
+        "shepherd" => &[
+            ("white_wool", 18, "emerald", 1),
+            ("emerald", 1, "shears", 1),
+            ("emerald", 3, "white_bed", 1),
+        ],
+        "butcher" => &[
+            ("porkchop", 14, "emerald", 1),
+            ("emerald", 1, "cooked_porkchop", 5),
+            ("chicken", 14, "emerald", 1),
+        ],
+        "mason" => &[
+            ("clay_ball", 10, "emerald", 1),
+            ("emerald", 1, "bricks", 10),
+            ("emerald", 1, "stone", 4),
+        ],
+        _ => &[("emerald", 1, "bread", 6), ("stick", 32, "emerald", 1)],
+    };
+    raw.iter()
+        .filter_map(|(bn, bc, gn, gc)| {
+            let bid = item::id_any(bn)?;
+            let gid = item::id_any(gn)?;
+            Some((item::ItemStack::new(bid, *bc), item::ItemStack::new(gid, *gc), item::ItemStack::EMPTY))
+        })
+        .collect()
 }
 
-/// Open a villager trade window.
-fn open_merchant(player: &Player) {
-    player.update(|s| s.open_merchant = true);
+/// Open a villager trade window for a villager of the given profession.
+fn open_merchant(player: &Player, profession: &'static str) {
+    player.update(|s| {
+        s.open_merchant = true;
+        s.merchant_prof = Some(profession);
+    });
     player.send(cb::open_window(2, 18, &text::plain("Villager"))); // 18 = merchant menu
-    player.send(cb::trade_list(2, &merchant_offers()));
+    player.send(cb::trade_list(2, &merchant_offers(profession)));
 }
 
 /// Execute a selected trade against the player's inventory.
 fn do_trade(player: &Player, index: i32) {
+    let Some(profession) = player.state().merchant_prof else {
+        return;
+    };
     if !player.state().open_merchant {
         return;
     }
-    let offers = merchant_offers();
+    let offers = merchant_offers(profession);
     let Some((input, output, _)) = offers.get(index as usize) else {
         return;
     };
@@ -1881,6 +1949,39 @@ fn handle_command(shared: &Arc<Shared>, player: &Player, command: &str) {
             command: name,
             args,
         });
+    }
+}
+
+#[cfg(test)]
+mod trade_tests {
+    use super::merchant_offers;
+    use crate::ai::PROFESSIONS;
+
+    #[test]
+    fn every_profession_has_resolvable_offers() {
+        for prof in PROFESSIONS {
+            let offers = merchant_offers(prof);
+            assert!(!offers.is_empty(), "{prof} had no offers");
+            for (input, output, _) in &offers {
+                assert!(input.id != 0, "{prof} offer had unknown input");
+                assert!(output.id != 0, "{prof} offer had unknown output");
+            }
+        }
+    }
+
+    #[test]
+    fn farmer_buys_wheat_for_emeralds() {
+        let offers = merchant_offers("farmer");
+        let emerald = crate::item::id_any("emerald").unwrap();
+        let wheat = crate::item::id_any("wheat").unwrap();
+        // First farmer trade: hand over wheat, receive an emerald.
+        assert_eq!(offers[0].0.id, wheat);
+        assert_eq!(offers[0].1.id, emerald);
+    }
+
+    #[test]
+    fn unknown_profession_falls_back() {
+        assert!(!merchant_offers("nonsense").is_empty());
     }
 }
 
