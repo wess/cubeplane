@@ -72,6 +72,7 @@ fn rewrite_clientbound_body(canonical_id: i32, protocol: i32, body: &[u8]) -> Op
         }
         // 1.19 and 1.19.2 have byte-identical packet bodies (only ids differ).
         PROTO_1_19_2 | PROTO_1_19 => rewrite_clientbound_body_1192(canonical_id, body),
+        PROTO_1_18_2 => rewrite_clientbound_body_758(canonical_id, body),
         _ => None,
     }
 }
@@ -120,11 +121,73 @@ fn rewrite_clientbound_body_1192(canonical_id: i32, body: &[u8]) -> Option<Vec<u
             Some(out)
         }
         // player_info update / player_remove → the single 1.19.2 player_info packet.
-        0x3a => convert_player_info_add_763_to_760(body),
-        0x39 => convert_player_remove_763_to_760(body),
+        0x3a => convert_player_info_add_763_to_old(body, true),
+        0x39 => convert_player_remove_763_to_old(body),
         // login / chunk / light share the 1.19.x rewrites.
         _ => rewrite_clientbound_body_119x(canonical_id, body),
     }
+}
+
+/// Body rewrites for 1.18.2: the 1.19.x chunk/light base, plus pre-1.19 forms of
+/// login (dimension inline as NBT), player_info (no chat-signature field), and
+/// chat (1.18 had no system_chat — system messages use the old chat packet).
+fn rewrite_clientbound_body_758(canonical_id: i32, body: &[u8]) -> Option<Vec<u8>> {
+    match canonical_id {
+        0x28 => rewrite_login_763_to_758(body),
+        0x3a => convert_player_info_add_763_to_old(body, false),
+        0x39 => convert_player_remove_763_to_old(body),
+        // sync player position: append dismountVehicle.
+        0x3c => {
+            let mut out = Vec::with_capacity(body.len() + 1);
+            out.extend_from_slice(body);
+            out.push(0x00);
+            Some(out)
+        }
+        // system_chat → 1.18 chat packet {message, position i8, sender UUID}.
+        0x64 => {
+            use cubeplane_protocol::{ProtoRead, ProtoWrite};
+            let mut r = BytesMut::from(body);
+            let content = r.read_string().ok()?;
+            let action_bar = r.read_bool().ok()?;
+            let mut o = BytesMut::new();
+            o.write_string(&content);
+            o.write_i8(if action_bar { 2 } else { 1 }); // 2 = action bar, 1 = system
+            o.write_bytes(&[0u8; 16]); // sender UUID = nil (system message)
+            Some(o.to_vec())
+        }
+        // map_chunk / update_light share the 1.19.x trustEdges rewrites.
+        _ => rewrite_clientbound_body_119x(canonical_id, body),
+    }
+}
+
+/// 763 → 1.18.2 Join Game: keep the inline codec, send the current dimension as
+/// an NBT compound (not a registry key), and drop the death/portalCooldown
+/// fields that 1.18.2 does not carry.
+fn rewrite_login_763_to_758(body: &[u8]) -> Option<Vec<u8>> {
+    use cubeplane_protocol::ProtoWrite;
+    let p = parse_763_login(body)?;
+    let mut o = BytesMut::new();
+    o.write_i32(p.entity_id);
+    o.write_bool(p.hardcore);
+    o.write_u8(p.game_mode);
+    o.write_i8(p.prev_game_mode);
+    o.write_varint(p.worlds.len() as i32);
+    for w in &p.worlds {
+        o.write_string(w);
+    }
+    o.extend_from_slice(&p.codec);
+    // `dimension`: the current dimension type as a (named) NBT compound.
+    o.extend_from_slice(&crate::registry::overworld_dimension_type().to_bytes_named(""));
+    o.write_string(&p.world_name);
+    o.write_i64(p.hashed_seed);
+    o.write_varint(p.max_players);
+    o.write_varint(p.view_distance);
+    o.write_varint(p.sim_distance);
+    o.write_bool(p.reduced_debug);
+    o.write_bool(p.respawn_screen);
+    o.write_bool(p.is_debug);
+    o.write_bool(p.is_flat);
+    Some(o.to_vec())
 }
 
 /// Body rewrites shared by the 1.19.x line (1.19.3/1.19.4). The login layout and
@@ -339,6 +402,7 @@ fn remap_play_serverbound(wire_id: i32, protocol: i32) -> i32 {
         PROTO_1_20_3 => apply_map(wire_id, SB_765_TO_763),
         PROTO_1_19_3 => apply_map(wire_id, SB_761_TO_763),
         PROTO_1_19 => apply_map(wire_id, SB_759_TO_763),
+        PROTO_1_18_2 => apply_map(wire_id, SB_758_TO_763),
         _ => wire_id,
     }
 }
@@ -356,6 +420,10 @@ fn remap_play_clientbound(canonical_id: i32, protocol: i32) -> i32 {
         // 1.19/1.19.1 likewise folds player_remove into player_info (0x34).
         PROTO_1_19 if canonical_id == 0x39 => 0x34,
         PROTO_1_19 => apply_map(canonical_id, CB_763_TO_759),
+        // 1.18.2: player_remove → player_info (0x36); system_chat → chat (0x0f).
+        PROTO_1_18_2 if canonical_id == 0x39 => 0x36,
+        PROTO_1_18_2 if canonical_id == 0x64 => 0x0f,
+        PROTO_1_18_2 => apply_map(canonical_id, CB_763_TO_758),
         // 1.19.4 play ids are identical to 763.
         _ => canonical_id,
     }
@@ -371,6 +439,8 @@ const PROTO_1_19_3: i32 = 761;
 const PROTO_1_19_2: i32 = 760;
 /// Protocol number for Minecraft 1.19 / 1.19.1.
 const PROTO_1_19: i32 = 759;
+/// Protocol number for Minecraft 1.18.2.
+const PROTO_1_18_2: i32 = 758;
 /// Protocol number for Minecraft 1.20.3 / 1.20.4.
 const PROTO_1_20_3: i32 = 765;
 
@@ -533,9 +603,43 @@ const SB_759_TO_763: &[(i32, i32)] = &[
     (0x30, 0x31), (0x31, 0x32),
 ];
 
+// Verified play packet-id maps between protocol 763 (1.20.1) and 758 (1.18.2),
+// from PrismarineJS minecraft-data. player_remove and system_chat are absent in
+// 1.18.2 (handled specially in the remap), so they're not in this table.
+const CB_763_TO_758: &[(i32, i32)] = &[
+    (0x1, 0x0), (0x2, 0x1), (0x3, 0x4), (0x4, 0x6), (0x5, 0x7), (0x6, 0x8), (0x7, 0x9),
+    (0x8, 0xa), (0x9, 0xb), (0xa, 0xc), (0xb, 0xd), (0xc, 0xe), (0xe, 0x10), (0xf, 0x11),
+    (0x10, 0x12), (0x11, 0x13), (0x12, 0x14), (0x13, 0x15), (0x14, 0x16), (0x15, 0x17),
+    (0x17, 0x18), (0x1c, 0x1b), (0x1d, 0x1c), (0x1e, 0x1d), (0x1f, 0x1e), (0x20, 0x1f),
+    (0x22, 0x20), (0x23, 0x21), (0x24, 0x22), (0x25, 0x23), (0x26, 0x24), (0x27, 0x25),
+    (0x28, 0x26), (0x29, 0x27), (0x2a, 0x28), (0x2b, 0x29), (0x2c, 0x2a), (0x2d, 0x2b),
+    (0x2e, 0x2c), (0x2f, 0x2d), (0x30, 0x2e), (0x31, 0x2f), (0x32, 0x30), (0x33, 0x31),
+    (0x34, 0x32), (0x36, 0x33), (0x37, 0x34), (0x38, 0x35), (0x3a, 0x36), (0x3b, 0x37),
+    (0x3c, 0x38), (0x3d, 0x39), (0x3e, 0x3a), (0x3f, 0x3b), (0x40, 0x3c), (0x41, 0x3d),
+    (0x42, 0x3e), (0x43, 0x3f), (0x44, 0x40), (0x46, 0x41), (0x47, 0x42), (0x48, 0x43),
+    (0x49, 0x44), (0x4a, 0x45), (0x4b, 0x46), (0x4c, 0x47), (0x4d, 0x48), (0x4e, 0x49),
+    (0x4f, 0x4a), (0x50, 0x4b), (0x51, 0x4c), (0x52, 0x4d), (0x53, 0x4e), (0x54, 0x4f),
+    (0x55, 0x50), (0x56, 0x51), (0x57, 0x52), (0x58, 0x53), (0x59, 0x54), (0x5a, 0x55),
+    (0x5b, 0x56), (0x5c, 0x57), (0x5d, 0x58), (0x5e, 0x59), (0x5f, 0x5a), (0x60, 0x5b),
+    (0x61, 0x5c), (0x62, 0x5d), (0x63, 0x5e), (0x65, 0x5f), (0x66, 0x60), (0x67, 0x61),
+    (0x68, 0x62), (0x69, 0x63), (0x6a, 0x64), (0x6c, 0x65), (0x6d, 0x66), (0x6e, 0x67),
+];
+
+const SB_758_TO_763: &[(i32, i32)] = &[
+    (0x4, 0x7), (0x5, 0x8), (0x6, 0x9), (0x7, 0xa), (0x8, 0xb), (0x9, 0xc), (0xa, 0xd),
+    (0xb, 0xe), (0xc, 0xf), (0xd, 0x10), (0xe, 0x11), (0xf, 0x12), (0x10, 0x13), (0x11, 0x14),
+    (0x12, 0x15), (0x13, 0x16), (0x14, 0x17), (0x15, 0x18), (0x16, 0x19), (0x17, 0x1a),
+    (0x18, 0x1b), (0x19, 0x1c), (0x1a, 0x1d), (0x1b, 0x1e), (0x1c, 0x1f), (0x1d, 0x20),
+    (0x1e, 0x21), (0x1f, 0x22), (0x20, 0x23), (0x21, 0x24), (0x22, 0x25), (0x23, 0x26),
+    (0x24, 0x27), (0x25, 0x28), (0x26, 0x29), (0x27, 0x2a), (0x28, 0x2b), (0x29, 0x2c),
+    (0x2a, 0x2d), (0x2b, 0x2e), (0x2c, 0x2f), (0x2d, 0x30), (0x2e, 0x31), (0x2f, 0x32),
+];
+
 /// Convert our clientbound Player Info Update (763, action mask
-/// add|gamemode|listed|latency) into the 1.19.2 Player Info `add_player` form.
-fn convert_player_info_add_763_to_760(body: &[u8]) -> Option<Vec<u8>> {
+/// add|gamemode|listed|latency) into the older single-action `add_player` form.
+/// `with_crypto` controls the trailing chat-signature option present in 1.19.x
+/// but absent in 1.18.x.
+fn convert_player_info_add_763_to_old(body: &[u8], with_crypto: bool) -> Option<Vec<u8>> {
     use cubeplane_protocol::{ProtoRead, ProtoWrite};
     let mut r = BytesMut::from(body);
     let action = r.read_u8().ok()?;
@@ -585,14 +689,16 @@ fn convert_player_info_add_763_to_760(body: &[u8]) -> Option<Vec<u8>> {
         o.write_varint(gamemode);
         o.write_varint(latency); // ping
         o.write_bool(false); // displayName: none
-        o.write_bool(false); // crypto (chat signature data): none
+        if with_crypto {
+            o.write_bool(false); // crypto (chat signature data): none (1.19.x only)
+        }
     }
     Some(o.to_vec())
 }
 
-/// Convert the 763 Player Remove packet into the 1.19.2 Player Info
+/// Convert the 763 Player Remove packet into the older Player Info
 /// `remove_player` form (action 4, just the uuids).
-fn convert_player_remove_763_to_760(body: &[u8]) -> Option<Vec<u8>> {
+fn convert_player_remove_763_to_old(body: &[u8]) -> Option<Vec<u8>> {
     use cubeplane_protocol::{ProtoRead, ProtoWrite};
     let mut r = BytesMut::from(body);
     let count = r.read_varint().ok()?;

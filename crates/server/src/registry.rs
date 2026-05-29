@@ -59,6 +59,12 @@ fn dim_element(skylight: bool, ceiling: bool, ultrawarm: bool, ambient: f32, eff
         .put_bool("has_ceiling", ceiling)
 }
 
+/// The overworld dimension-type element. Pre-1.19 login packets carry the
+/// current dimension inline as this NBT compound (rather than a registry key).
+pub fn overworld_dimension_type() -> Nbt {
+    dim_element(true, false, false, 0.0, "minecraft:overworld")
+}
+
 fn dimension_registry() -> Nbt {
     let dims = [
         ("minecraft:overworld", dim_element(true, false, false, 0.0, "minecraft:overworld")),
