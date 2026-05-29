@@ -126,6 +126,67 @@ pub fn save_player(dir: &Path, uuid: Uuid, data: &PlayerData) -> io::Result<()> 
     std::fs::write(player_path(dir, uuid), json)
 }
 
+/// Full-chunk persistence: each chunk's complete block grid is run-length
+/// encoded to a file `region/c.<cx>.<cz>.bin`. This stores entire chunks rather
+/// than a delta over the generator — the moral equivalent of Anvil regions.
+pub struct RegionStore {
+    dir: PathBuf,
+}
+
+const REGION_MAGIC: &[u8; 4] = b"CPR1";
+
+impl RegionStore {
+    pub fn new(dir: &Path) -> RegionStore {
+        let dir = dir.join("region");
+        let _ = std::fs::create_dir_all(&dir);
+        RegionStore { dir }
+    }
+
+    fn chunk_path(&self, cx: i32, cz: i32) -> PathBuf {
+        self.dir.join(format!("c.{cx}.{cz}.bin"))
+    }
+
+    /// Save a chunk's flat block grid (run-length encoded).
+    pub fn save_chunk(&self, cx: i32, cz: i32, grid: &[u16]) -> io::Result<()> {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(REGION_MAGIC);
+        // RLE: pairs of (state u16, run-length u32).
+        let mut i = 0;
+        while i < grid.len() {
+            let v = grid[i];
+            let mut run = 1u32;
+            while i + (run as usize) < grid.len() && grid[i + run as usize] == v {
+                run += 1;
+            }
+            buf.extend_from_slice(&v.to_le_bytes());
+            buf.extend_from_slice(&run.to_le_bytes());
+            i += run as usize;
+        }
+        let tmp = self.chunk_path(cx, cz).with_extension("tmp");
+        std::fs::write(&tmp, &buf)?;
+        std::fs::rename(tmp, self.chunk_path(cx, cz))
+    }
+
+    /// Load a chunk's flat block grid, if it was saved.
+    pub fn load_chunk(&self, cx: i32, cz: i32) -> Option<Vec<u16>> {
+        let buf = std::fs::read(self.chunk_path(cx, cz)).ok()?;
+        if buf.len() < 4 || &buf[0..4] != REGION_MAGIC {
+            return None;
+        }
+        let mut grid = Vec::new();
+        let mut off = 4;
+        while off + 6 <= buf.len() {
+            let v = u16::from_le_bytes([buf[off], buf[off + 1]]);
+            let run = u32::from_le_bytes([buf[off + 2], buf[off + 3], buf[off + 4], buf[off + 5]]);
+            for _ in 0..run {
+                grid.push(v);
+            }
+            off += 6;
+        }
+        Some(grid)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -139,6 +200,20 @@ mod tests {
         save_blocks(&dir, &edits).unwrap();
         let loaded = load_blocks(&dir);
         assert_eq!(loaded, edits);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn region_chunk_roundtrip() {
+        let dir = std::env::temp_dir().join(format!("cp-region-{}", std::process::id()));
+        let store = RegionStore::new(&dir);
+        let mut grid = vec![0u16; 100];
+        grid[10] = 1;
+        grid[11] = 1;
+        grid[50] = 80;
+        store.save_chunk(3, -4, &grid).unwrap();
+        assert_eq!(store.load_chunk(3, -4), Some(grid));
+        assert_eq!(store.load_chunk(0, 0), None);
         std::fs::remove_dir_all(&dir).ok();
     }
 

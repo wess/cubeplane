@@ -374,6 +374,38 @@ impl Chunk {
     pub fn is_empty(&self) -> bool {
         self.sections.iter().all(Section::is_empty)
     }
+
+    /// Flatten the column to a grid of state ids in `((y_rel*16)+z)*16+x` order
+    /// (`y_rel = world_y - MIN_Y`), for full-chunk persistence.
+    pub fn to_grid(&self) -> Vec<StateId> {
+        let h = WORLD_HEIGHT as usize;
+        let mut g = vec![0u16; h * 256];
+        for yr in 0..h {
+            for z in 0..SECTION_DIM {
+                for x in 0..SECTION_DIM {
+                    g[(yr * 16 + z) * 16 + x] = self.get_block(x, MIN_Y + yr as i32, z);
+                }
+            }
+        }
+        g
+    }
+
+    /// Rebuild a chunk from a flattened grid produced by [`Chunk::to_grid`].
+    pub fn from_grid(cx: i32, cz: i32, grid: &[StateId]) -> Chunk {
+        let mut c = Chunk::new(cx, cz);
+        let h = WORLD_HEIGHT as usize;
+        for yr in 0..h {
+            for z in 0..SECTION_DIM {
+                for x in 0..SECTION_DIM {
+                    let s = grid[(yr * 16 + z) * 16 + x];
+                    if !block::is_air(s) {
+                        c.set_block(x, MIN_Y + yr as i32, z, s);
+                    }
+                }
+            }
+        }
+        c
+    }
 }
 
 /// Pre-computed light payload for the Chunk Data / Update Light packets.

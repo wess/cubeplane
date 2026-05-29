@@ -43,14 +43,14 @@ async fn drive(stream: TcpStream, shared: Arc<Shared>) -> Result<()> {
     // --- Handshake -----------------------------------------------------------
     let frame = read_frame(&mut rh, NO_COMPRESSION).await?;
     let mut raw = RawPacket::parse(frame)?;
-    let _protocol = raw.body.read_varint()?;
+    let protocol = raw.body.read_varint()?;
     let _host = raw.body.read_string()?;
     let _port = raw.body.read_u16()?;
     let next_state = raw.body.read_varint()?;
 
     match next_state {
         1 => status(&mut rh, &mut wh, &shared).await,
-        2 => login(rh, wh, shared).await,
+        2 => login(rh, wh, shared, protocol).await,
         other => {
             debug!("unknown next-state {other} in handshake");
             Ok(())
@@ -106,13 +106,28 @@ fn status_json(shared: &Arc<Shared>) -> String {
 // Login
 // ---------------------------------------------------------------------------
 
-async fn login(mut rh: OwnedReadHalf, mut wh: OwnedWriteHalf, shared: Arc<Shared>) -> Result<()> {
+async fn login(mut rh: OwnedReadHalf, mut wh: OwnedWriteHalf, shared: Arc<Shared>, protocol: i32) -> Result<()> {
     let frame = read_frame(&mut rh, NO_COMPRESSION).await?;
     let mut raw = RawPacket::parse(frame)?;
     if raw.id != login_sb::LOGIN_START {
         return Ok(());
     }
     let name = raw.body.read_string()?;
+
+    // Version gate: cubeplane speaks exactly protocol 763 (Minecraft 1.20.1).
+    if protocol != PROTOCOL_VERSION {
+        let reason = text::colored(
+            format!(
+                "cubeplane requires Minecraft {} (protocol {}); you connected with protocol {}.",
+                cubeplane_protocol::GAME_VERSION,
+                PROTOCOL_VERSION,
+                protocol
+            ),
+            "red",
+        );
+        write_frame(&mut wh, &cb::login_disconnect(&reason), NO_COMPRESSION).await?;
+        return Ok(());
+    }
 
     // Reject if full.
     if shared.player_count() as i32 >= shared.config.server.max_players {

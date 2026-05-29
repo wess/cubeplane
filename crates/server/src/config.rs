@@ -45,6 +45,9 @@ pub struct WorldConfig {
     pub save: bool,
     /// Directory for saved world/player data.
     pub save_dir: String,
+    /// Persistence format: "delta" (edits over the generator) or "region"
+    /// (full chunk columns, Anvil-style).
+    pub format: String,
     /// Keep a player's items when they die.
     pub keep_inventory: bool,
     /// Spawn hostile mobs (otherwise only passive animals appear).
@@ -91,6 +94,7 @@ impl Default for WorldConfig {
             seed: 0x5EED,
             save: true,
             save_dir: "world_data".into(),
+            format: "delta".into(),
             keep_inventory: false,
             spawn_hostiles: true,
         }

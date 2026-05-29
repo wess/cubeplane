@@ -9,8 +9,11 @@ pub mod blocks_table;
 pub mod chunk;
 pub mod gen;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+
+/// A loader that fetches a saved chunk's flat block grid, if persisted.
+pub type ChunkLoader = Box<dyn Fn(i32, i32) -> Option<Vec<block::StateId>> + Send + Sync>;
 
 pub use block::StateId;
 pub use chunk::{Chunk, MIN_Y, SECTION_COUNT, WORLD_HEIGHT};
@@ -24,6 +27,10 @@ pub struct World {
     /// chunks as they are (re)generated so the world survives reloads and chunk
     /// unloading.
     edits: HashMap<(i32, i32, i32), StateId>,
+    /// Optional full-chunk loader (region persistence backend).
+    loader: Option<ChunkLoader>,
+    /// Chunks changed this session, pending a full-chunk save.
+    dirty: HashSet<(i32, i32)>,
     spawn: (f64, f64, f64),
 }
 
@@ -36,8 +43,34 @@ impl World {
             generator,
             chunks: HashMap::new(),
             edits: HashMap::new(),
+            loader: None,
+            dirty: HashSet::new(),
             spawn: (0.5, spawn_y, 0.5),
         }
+    }
+
+    /// Install a full-chunk loader (region persistence backend).
+    pub fn set_loader(&mut self, loader: ChunkLoader) {
+        self.loader = Some(loader);
+    }
+
+    /// Build a chunk: prefer a persisted full chunk, else generate + overlay.
+    fn build_chunk(&self, cx: i32, cz: i32) -> Chunk {
+        if let Some(loader) = &self.loader {
+            if let Some(grid) = loader(cx, cz) {
+                return Chunk::from_grid(cx, cz, &grid);
+            }
+        }
+        self.generate_chunk(cx, cz)
+    }
+
+    /// Drain chunks changed this session as `((cx, cz), grid)` for saving.
+    pub fn take_dirty_grids(&mut self) -> Vec<((i32, i32), Vec<StateId>)> {
+        let dirty: Vec<(i32, i32)> = self.dirty.drain().collect();
+        dirty
+            .into_iter()
+            .filter_map(|(cx, cz)| self.chunks.get(&(cx, cz)).map(|c| ((cx, cz), c.to_grid())))
+            .collect()
     }
 
     /// Seed the world with previously-saved block edits (call before serving).
@@ -86,7 +119,7 @@ impl World {
     /// Get a chunk, generating and caching it if not yet loaded.
     pub fn chunk(&mut self, cx: i32, cz: i32) -> &Chunk {
         if !self.chunks.contains_key(&(cx, cz)) {
-            let chunk = self.generate_chunk(cx, cz);
+            let chunk = self.build_chunk(cx, cz);
             self.chunks.insert((cx, cz), chunk);
         }
         self.chunks.get(&(cx, cz)).unwrap()
@@ -122,11 +155,12 @@ impl World {
     pub fn set_block(&mut self, x: i32, y: i32, z: i32, state: StateId) -> (i32, i32) {
         let (cx, cz, lx, lz) = world_to_chunk(x, z);
         if !self.chunks.contains_key(&(cx, cz)) {
-            let chunk = self.generate_chunk(cx, cz);
+            let chunk = self.build_chunk(cx, cz);
             self.chunks.insert((cx, cz), chunk);
         }
         self.chunks.get_mut(&(cx, cz)).unwrap().set_block(lx, y, lz, state);
         self.edits.insert((x, y, z), state);
+        self.dirty.insert((cx, cz));
         (cx, cz)
     }
 }

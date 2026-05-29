@@ -60,14 +60,22 @@ fn make_generator(config: &Config) -> Arc<dyn Generator> {
 pub async fn run(config: Config) -> Result<()> {
     let mut world = World::new(make_generator(&config));
 
-    // Load persisted block edits.
+    // Load persisted world data in the configured format.
     let save_dir = std::path::PathBuf::from(&config.world.save_dir);
+    let region = config.world.format == "region";
     if config.world.save {
-        let edits = persistence::load_blocks(&save_dir);
-        if !edits.is_empty() {
-            info!("loaded {} saved block edit(s)", edits.len());
+        if region {
+            // Full-chunk backend: install a loader that reads saved chunks.
+            let store = persistence::RegionStore::new(&save_dir);
+            world.set_loader(Box::new(move |cx, cz| store.load_chunk(cx, cz)));
+            info!("persistence: region (full-chunk) backend");
+        } else {
+            let edits = persistence::load_blocks(&save_dir);
+            if !edits.is_empty() {
+                info!("loaded {} saved block edit(s)", edits.len());
+            }
+            world.load_edits(edits);
         }
-        world.load_edits(edits);
     }
 
     // Start the mod runtime, if enabled.
@@ -126,7 +134,7 @@ pub async fn run(config: Config) -> Result<()> {
     tokio::spawn(game_loop(shared.clone()));
 
     if shared.config.world.save {
-        tokio::spawn(save_loop(shared.clone(), save_dir));
+        tokio::spawn(save_loop(shared.clone(), save_dir, region));
     }
 
     if shared.config.control.enabled {
@@ -230,15 +238,26 @@ fn evict_chunks(shared: &Arc<Shared>) {
     }
 }
 
-/// Periodically persist world edits and online players' data.
-async fn save_loop(shared: Arc<Shared>, save_dir: std::path::PathBuf) {
+/// Periodically persist world data and online players' data.
+async fn save_loop(shared: Arc<Shared>, save_dir: std::path::PathBuf, region: bool) {
+    let store = region.then(|| persistence::RegionStore::new(&save_dir));
     let mut interval = tokio::time::interval(Duration::from_secs(60));
     interval.tick().await; // skip the immediate first tick
     loop {
         interval.tick().await;
-        let edits = shared.world.lock().unwrap().edits().clone();
-        if let Err(e) = persistence::save_blocks(&save_dir, &edits) {
-            error!("failed to save world: {e}");
+        if let Some(store) = &store {
+            // Region backend: write every chunk changed this session in full.
+            let dirty = shared.world.lock().unwrap().take_dirty_grids();
+            for ((cx, cz), grid) in dirty {
+                if let Err(e) = store.save_chunk(cx, cz, &grid) {
+                    error!("failed to save chunk {cx},{cz}: {e}");
+                }
+            }
+        } else {
+            let edits = shared.world.lock().unwrap().edits().clone();
+            if let Err(e) = persistence::save_blocks(&save_dir, &edits) {
+                error!("failed to save world: {e}");
+            }
         }
 
         // Persist chest contents.

@@ -25,6 +25,9 @@ seed = 24317
 # Persist block edits and player data to disk.
 save = true
 save_dir = "world_data"
+# Persistence format: "delta" (edits over the generator) or "region"
+# (full chunk columns, Anvil-style).
+format = "delta"
 # Keep a player's items when they die.
 keep_inventory = false
 # Spawn hostile mobs at night (otherwise only passive animals appear).
