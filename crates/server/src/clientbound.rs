@@ -484,27 +484,38 @@ pub fn set_passengers(vehicle: i32, passengers: &[i32]) -> BytesMut {
     b
 }
 
-/// A villager's trade list. Each offer is `(input1, output, input2)`.
-pub fn trade_list(window_id: i32, offers: &[(ItemStack, ItemStack, ItemStack)]) -> BytesMut {
+/// Maximum times a single villager trade can be used before it locks until the
+/// villager restocks.
+pub const MAX_TRADE_USES: u8 = 12;
+
+/// A villager's trade list. Each offer is `(input1, output, input2)`; `uses`
+/// gives the times each offer has been used (parallel to `offers`).
+pub fn trade_list(
+    window_id: i32,
+    offers: &[(ItemStack, ItemStack, ItemStack)],
+    uses: &[u8],
+    level: i32,
+) -> BytesMut {
     let mut b = pkt(play_cb::TRADE_LIST);
     b.write_varint(window_id);
     b.write_varint(offers.len() as i32);
-    for (in1, out, in2) in offers {
+    for (i, (in1, out, in2)) in offers.iter().enumerate() {
+        let used = uses.get(i).copied().unwrap_or(0);
         write_slot(&mut b, *in1);
         write_slot(&mut b, *out);
         write_slot(&mut b, *in2);
-        b.write_bool(false); // trade disabled
-        b.write_i32(0); // uses
-        b.write_i32(999); // max uses
+        b.write_bool(used >= MAX_TRADE_USES); // trade disabled when exhausted
+        b.write_i32(used as i32); // uses
+        b.write_i32(MAX_TRADE_USES as i32); // max uses
         b.write_i32(2); // xp
         b.write_i32(0); // special price
         b.write_f32(0.0); // price multiplier
         b.write_i32(0); // demand
     }
-    b.write_varint(1); // villager level
+    b.write_varint(level); // villager level
     b.write_varint(0); // experience
     b.write_bool(true); // regular villager
-    b.write_bool(false); // can restock
+    b.write_bool(true); // can restock
     b
 }
 

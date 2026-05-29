@@ -359,6 +359,11 @@ async fn game_loop(shared: Arc<Shared>) {
             combat::hunger_tick(&shared);
         }
 
+        // Villagers restock their trades roughly twice a Minecraft day.
+        if ticks.is_multiple_of(12_000) {
+            shared.restock_trades();
+        }
+
         // Evict far-away chunks from memory every 30 seconds.
         if ticks.is_multiple_of(600) {
             evict_chunks(&shared);

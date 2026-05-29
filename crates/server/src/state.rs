@@ -104,6 +104,8 @@ pub struct Shared {
     villagers: RwLock<HashMap<i32, VillagerBrain>>,
     /// Active status effects per player entity id.
     effects: RwLock<HashMap<i32, Vec<crate::effects::ActiveEffect>>>,
+    /// Per-villager trade-use counts (entity id → uses per offer index).
+    trade_uses: RwLock<HashMap<i32, Vec<u8>>>,
     started: Instant,
 }
 
@@ -141,6 +143,7 @@ impl Shared {
             ai: RwLock::new(config_ai),
             villagers: RwLock::new(HashMap::new()),
             effects: RwLock::new(HashMap::new()),
+            trade_uses: RwLock::new(HashMap::new()),
             mods,
             server_key,
             started: Instant::now(),
@@ -597,6 +600,36 @@ impl Shared {
     /// Clear all of a player's effects (on leave/respawn).
     pub fn clear_effects(&self, eid: i32) {
         self.effects.write().unwrap().remove(&eid);
+    }
+
+    /// A villager's per-offer trade-use counts (length `offer_count`).
+    pub fn trade_uses(&self, villager: i32, offer_count: usize) -> Vec<u8> {
+        let mut map = self.trade_uses.write().unwrap();
+        let v = map.entry(villager).or_insert_with(|| vec![0; offer_count]);
+        if v.len() < offer_count {
+            v.resize(offer_count, 0);
+        }
+        v.clone()
+    }
+
+    /// Record one use of a villager's trade offer, returning the new count.
+    pub fn use_trade(&self, villager: i32, index: usize, offer_count: usize) -> u8 {
+        let mut map = self.trade_uses.write().unwrap();
+        let v = map.entry(villager).or_insert_with(|| vec![0; offer_count]);
+        if v.len() < offer_count {
+            v.resize(offer_count, 0);
+        }
+        if let Some(slot) = v.get_mut(index) {
+            *slot = slot.saturating_add(1);
+            *slot
+        } else {
+            0
+        }
+    }
+
+    /// Restock all villagers, clearing every trade's use count.
+    pub fn restock_trades(&self) {
+        self.trade_uses.write().unwrap().clear();
     }
 
     /// Fire an event into the mod runtime, if mods are enabled.

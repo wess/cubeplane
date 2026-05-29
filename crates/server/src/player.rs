@@ -41,6 +41,8 @@ pub struct PlayerState {
     pub open_merchant: bool,
     /// Profession of the villager currently being traded with, if any.
     pub merchant_prof: Option<&'static str>,
+    /// Entity id of the villager currently being traded with, if any.
+    pub merchant_id: Option<i32>,
     /// Position of the furnace whose window is open, if any.
     pub open_furnace: Option<(i32, i32, i32)>,
     /// Position of the brewing stand whose window is open, if any.
@@ -87,6 +89,7 @@ impl PlayerState {
             open_container: None,
             open_merchant: false,
             merchant_prof: None,
+            merchant_id: None,
             open_furnace: None,
             open_brewing: None,
             open_crafting: false,

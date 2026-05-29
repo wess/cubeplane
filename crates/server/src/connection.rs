@@ -534,7 +534,7 @@ async fn play_loop<R: AsyncRead + Unpin>(
                 apply_window_click(shared, player, window_id, &changed);
             }
             Play::SelectTrade { index } => {
-                do_trade(player, index);
+                do_trade(shared, player, index);
             }
             Play::UpdateSign { x, y, z, lines } => {
                 shared.set_sign((x, y, z), lines);
@@ -551,6 +551,7 @@ async fn play_loop<R: AsyncRead + Unpin>(
                     s.open_container = None;
                     s.open_merchant = false;
                     s.merchant_prof = None;
+                    s.merchant_id = None;
                     s.open_furnace = None;
                     s.open_brewing = None;
                     s.open_crafting = false;
@@ -880,7 +881,7 @@ fn interact_entity(shared: &Arc<Shared>, player: &Player, target: i32) {
         if shared.ai_config().enabled {
             start_conversation(shared, player, target);
         } else {
-            open_merchant(player, crate::ai::profession_for(target));
+            open_merchant(shared, player, target, crate::ai::profession_for(target));
         }
         return;
     }
@@ -1089,18 +1090,21 @@ fn merchant_offers(profession: &str) -> Vec<(item::ItemStack, item::ItemStack, i
 }
 
 /// Open a villager trade window for a villager of the given profession.
-fn open_merchant(player: &Player, profession: &'static str) {
+fn open_merchant(shared: &Arc<Shared>, player: &Player, villager: i32, profession: &'static str) {
+    let offers = merchant_offers(profession);
+    let uses = shared.trade_uses(villager, offers.len());
     player.update(|s| {
         s.open_merchant = true;
         s.merchant_prof = Some(profession);
+        s.merchant_id = Some(villager);
     });
     player.send(cb::open_window(2, 18, &text::plain("Villager"))); // 18 = merchant menu
-    player.send(cb::trade_list(2, &merchant_offers(profession)));
+    player.send(cb::trade_list(2, &offers, &uses, 1));
 }
 
 /// Execute a selected trade against the player's inventory.
-fn do_trade(player: &Player, index: i32) {
-    let Some(profession) = player.state().merchant_prof else {
+fn do_trade(shared: &Arc<Shared>, player: &Player, index: i32) {
+    let (Some(profession), Some(villager)) = (player.state().merchant_prof, player.state().merchant_id) else {
         return;
     };
     if !player.state().open_merchant {
@@ -1110,6 +1114,12 @@ fn do_trade(player: &Player, index: i32) {
     let Some((input, output, _)) = offers.get(index as usize) else {
         return;
     };
+    // A trade locked out by repeated use can't be made until the villager restocks.
+    let used = shared.trade_uses(villager, offers.len());
+    if used.get(index as usize).copied().unwrap_or(0) >= cb::MAX_TRADE_USES {
+        player.send(cb::system_chat(&text::colored("That trade is out of stock for now.", "red"), false));
+        return;
+    }
     let traded = player.inventory(|inv| {
         if inv.has(input.id, input.count) {
             inv.remove(input.id, input.count);
@@ -1120,9 +1130,13 @@ fn do_trade(player: &Player, index: i32) {
         }
     });
     if traded {
+        shared.use_trade(villager, index as usize, offers.len());
         player.sync_inventory();
         let s = player.state();
         player.send(cb::sound_effect("entity.villager.yes", 6, s.x, s.y, s.z, 1.0, 1.0));
+        // Refresh the window so the client sees the updated use count.
+        let uses = shared.trade_uses(villager, offers.len());
+        player.send(cb::trade_list(2, &offers, &uses, 1));
     } else {
         player.send(cb::system_chat(&text::colored("You don't have what that trade needs.", "red"), false));
     }
