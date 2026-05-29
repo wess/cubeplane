@@ -181,8 +181,10 @@ cubeplane/
 └── cubeplane.toml  # configuration
 ```
 
-More in [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) and
-[docs/PROTOCOL.md](./docs/PROTOCOL.md).
+More in [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md),
+[docs/PROTOCOL.md](./docs/PROTOCOL.md), and
+[docs/MULTIVERSION.md](./docs/MULTIVERSION.md) (serves MC 1.18–1.20.4).
+AI sessions should start from [CLAUDE.md](./CLAUDE.md).
 
 ## Development
 

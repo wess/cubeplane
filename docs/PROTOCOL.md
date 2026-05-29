@@ -16,6 +16,9 @@ In 1.20.1 the client enters **Play** immediately after Login Success (the
 separate Configuration phase arrives in 1.20.2). cubeplane runs in offline mode
 (no encryption); compression is negotiated with Set Compression.
 
+> cubeplane also serves protocols **757–765 (MC 1.18 → 1.20.4)** by translating
+> this 763 layout per version. See [MULTIVERSION.md](MULTIVERSION.md).
+
 ## Handshake (serverbound)
 
 | Id | Packet |
