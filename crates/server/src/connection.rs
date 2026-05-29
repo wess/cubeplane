@@ -505,6 +505,7 @@ async fn play_loop<R: AsyncRead + Unpin>(
                 // Interacting with a lever/chest/sign takes priority over placing.
                 if !try_flint(shared, player, x, y, z, face)
                     && !try_toggle_lever(shared, player, x, y, z)
+                    && !try_use_door(shared, player, x, y, z)
                     && !try_use_bed(shared, player, x, y, z)
                     && !try_open_container(shared, player, x, y, z)
                     && !try_open_furnace(shared, player, x, y, z)
@@ -1060,6 +1061,57 @@ fn try_toggle_lever(shared: &Arc<Shared>, player: &Player, x: i32, y: i32, z: i3
     if dim == 0 {
         crate::sim::redstone_update(shared, x, y, z);
     }
+    true
+}
+
+/// Right-click a door, trapdoor or fence gate to toggle it open/closed.
+/// Iron doors and iron trapdoors only respond to redstone, not the hand.
+fn try_use_door(shared: &Arc<Shared>, player: &Player, x: i32, y: i32, z: i32) -> bool {
+    let dim = player.state().dimension;
+    let state = { shared.dim_world(dim).lock().unwrap().get_block(x, y, z) };
+    let name = cubeplane_world::block::name_of(state);
+    let is_door = name.ends_with("_door");
+    let is_trapdoor = name.ends_with("_trapdoor");
+    let is_gate = name.ends_with("_fence_gate");
+    if !(is_door || is_trapdoor || is_gate) {
+        return false;
+    }
+    // Iron doors/trapdoors can't be opened by hand.
+    if name == "iron_door" || name == "iron_trapdoor" {
+        return true;
+    }
+    let open = cubeplane_world::block::prop_index(state, "open").unwrap_or(1);
+    let new_open = if open == 0 { 1 } else { 0 };
+    let toggled = cubeplane_world::block::with_prop(state, "open", new_open);
+    let mut updates = vec![(x, y, z, toggled)];
+    // A door is two stacked blocks; keep both halves in sync.
+    if is_door {
+        let other_y = if cubeplane_world::block::prop_index(state, "half") == Some(0) { y - 1 } else { y + 1 };
+        let other = { shared.dim_world(dim).lock().unwrap().get_block(x, other_y, z) };
+        if cubeplane_world::block::name_of(other).ends_with("_door") {
+            updates.push((x, other_y, z, cubeplane_world::block::with_prop(other, "open", new_open)));
+        }
+    }
+    {
+        let mut w = shared.dim_world(dim).lock().unwrap();
+        for (ux, uy, uz, us) in &updates {
+            w.set_block(*ux, *uy, *uz, *us);
+        }
+    }
+    for (ux, uy, uz, us) in updates {
+        shared.broadcast(cb::block_update(ux, uy, uz, us));
+    }
+    // Door sounds use the inline name form (varint 0 + identifier).
+    let sound = if new_open == 0 {
+        if is_door { "block.wooden_door.open" } else if is_gate { "block.fence_gate.open" } else { "block.wooden_trapdoor.open" }
+    } else if is_door {
+        "block.wooden_door.close"
+    } else if is_gate {
+        "block.fence_gate.close"
+    } else {
+        "block.wooden_trapdoor.close"
+    };
+    shared.broadcast(cb::sound_effect(sound, 0, x as f64 + 0.5, y as f64 + 0.5, z as f64 + 0.5, 1.0, 1.0));
     true
 }
 

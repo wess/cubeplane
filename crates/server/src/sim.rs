@@ -313,10 +313,20 @@ pub fn tnt_tick(shared: &Arc<Shared>) {
 
 /// Whether a block participates in redstone (so we know when to recompute).
 pub fn is_redstone(name: &str) -> bool {
-    matches!(
-        name,
-        "redstone_wire" | "redstone_block" | "redstone_torch" | "redstone_wall_torch" | "lever" | "redstone_lamp"
-    )
+    is_redstone_source(name) || is_actuator(name)
+}
+
+/// A block that emits redstone power.
+fn is_redstone_source(name: &str) -> bool {
+    matches!(name, "redstone_wire" | "redstone_block" | "redstone_torch" | "redstone_wall_torch" | "lever")
+}
+
+/// A block that reacts to redstone power: lamps light, doors/gates open.
+fn is_actuator(name: &str) -> bool {
+    name == "redstone_lamp"
+        || name.ends_with("_door")
+        || name.ends_with("_trapdoor")
+        || name.ends_with("_fence_gate")
 }
 
 /// Recompute redstone power in a box around a change: flood power from sources
@@ -329,7 +339,7 @@ pub fn redstone_update(shared: &Arc<Shared>, ox: i32, oy: i32, oz: i32) {
     let mut world = shared.world.lock().unwrap();
     // Snapshot redstone-relevant blocks in the box.
     let mut wires: HashMap<(i32, i32, i32), u16> = HashMap::new();
-    let mut lamps: Vec<(i32, i32, i32, u16)> = Vec::new();
+    let mut actuators: Vec<(i32, i32, i32, u16)> = Vec::new();
     let mut power: HashMap<(i32, i32, i32), u32> = HashMap::new();
     let mut queue: VecDeque<(i32, i32, i32, u32)> = VecDeque::new();
 
@@ -338,23 +348,19 @@ pub fn redstone_update(shared: &Arc<Shared>, ox: i32, oy: i32, oz: i32) {
             for dz in -R..=R {
                 let (x, y, z) = (ox + dx, oy + dy, oz + dz);
                 let s = world.get_block(x, y, z);
-                match block::name_of(s) {
-                    "redstone_wire" => {
-                        wires.insert((x, y, z), s);
+                let name = block::name_of(s);
+                if name == "redstone_wire" {
+                    wires.insert((x, y, z), s);
+                } else if is_actuator(name) {
+                    actuators.push((x, y, z, s));
+                } else if name == "redstone_block" {
+                    queue.push_back((x, y, z, 15));
+                } else if matches!(name, "redstone_torch" | "redstone_wall_torch") {
+                    if block::prop_index(s, "lit") == Some(0) {
+                        queue.push_back((x, y, z, 15));
                     }
-                    "redstone_lamp" => lamps.push((x, y, z, s)),
-                    "redstone_block" => queue.push_back((x, y, z, 15)),
-                    "redstone_torch" | "redstone_wall_torch" => {
-                        if block::prop_index(s, "lit") == Some(0) {
-                            queue.push_back((x, y, z, 15));
-                        }
-                    }
-                    "lever" => {
-                        if block::prop_index(s, "powered") == Some(0) {
-                            queue.push_back((x, y, z, 15));
-                        }
-                    }
-                    _ => {}
+                } else if name == "lever" && block::prop_index(s, "powered") == Some(0) {
+                    queue.push_back((x, y, z, 15));
                 }
             }
         }
@@ -385,11 +391,18 @@ pub fn redstone_update(shared: &Arc<Shared>, ox: i32, oy: i32, oz: i32) {
             changes.push((pos.0, pos.1, pos.2, want));
         }
     }
-    for (x, y, z, state) in lamps {
-        let powered = neighbors6(x, y, z)
-            .into_iter()
-            .any(|(nx, ny, nz)| power.get(&(nx, ny, nz)).copied().unwrap_or(0) > 0 || is_source(&world.get_block(nx, ny, nz)));
-        let want = block::with_prop(state, "lit", if powered { 0 } else { 1 });
+    for (x, y, z, state) in actuators {
+        let name = block::name_of(state);
+        // A door is powered if power reaches either of its two halves.
+        let powered = if name.ends_with("_door") {
+            let other = if block::prop_index(state, "half") == Some(0) { y - 1 } else { y + 1 };
+            powered_at(&power, &mut world, x, y, z) || powered_at(&power, &mut world, x, other, z)
+        } else {
+            powered_at(&power, &mut world, x, y, z)
+        };
+        // Lamps drive "lit" (0 = on); doors/gates drive "open" (0 = open).
+        let prop = if name == "redstone_lamp" { "lit" } else { "open" };
+        let want = block::with_prop(state, prop, if powered { 0 } else { 1 });
         if want != state {
             changes.push((x, y, z, want));
         }
@@ -401,6 +414,19 @@ pub fn redstone_update(shared: &Arc<Shared>, ox: i32, oy: i32, oz: i32) {
     for (x, y, z, s) in changes {
         shared.broadcast(cb::block_update(x, y, z, s));
     }
+}
+
+/// Whether any of a block's six neighbours carries redstone power.
+fn powered_at(
+    power: &std::collections::HashMap<(i32, i32, i32), u32>,
+    world: &mut cubeplane_world::World,
+    x: i32,
+    y: i32,
+    z: i32,
+) -> bool {
+    neighbors6(x, y, z)
+        .into_iter()
+        .any(|(nx, ny, nz)| power.get(&(nx, ny, nz)).copied().unwrap_or(0) > 0 || is_source(&world.get_block(nx, ny, nz)))
 }
 
 fn is_source(state: &u16) -> bool {
@@ -438,5 +464,22 @@ mod tests {
         assert!(is_flammable("oak_planks"));
         assert!(is_flammable("birch_log"));
         assert!(!is_flammable("stone"));
+    }
+
+    #[test]
+    fn redstone_classification() {
+        // Sources emit power; actuators react to it; both count as redstone.
+        assert!(is_redstone_source("lever"));
+        assert!(is_redstone_source("redstone_wire"));
+        assert!(is_actuator("redstone_lamp"));
+        assert!(is_actuator("oak_door"));
+        assert!(is_actuator("oak_trapdoor"));
+        assert!(is_actuator("oak_fence_gate"));
+        assert!(is_redstone("oak_door"));
+        assert!(!is_redstone("stone"));
+        // Doors carry an "open" property we can toggle.
+        let d = block::state_by_name("oak_door").unwrap();
+        let opened = block::with_prop(d, "open", 0);
+        assert_eq!(block::prop_index(opened, "open"), Some(0));
     }
 }
