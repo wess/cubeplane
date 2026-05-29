@@ -1,0 +1,20 @@
+[package]
+name = "cubeplane"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "cubeplane — a feature-complete Minecraft server engine in Rust with JS mods"
+default-run = "cubeplane"
+
+[[bin]]
+name = "cubeplane"
+path = "src/main.rs"
+
+[dependencies]
+cubeplane-server = { workspace = true }
+tokio = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }

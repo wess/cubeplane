@@ -1,0 +1,21 @@
+# Rust
+/target
+**/*.rs.bk
+Cargo.lock.orig
+
+# cubeplane runtime data
+/world_data
+/logs
+*.log
+
+# Admin panel (Bun/Node)
+admin/node_modules
+admin/dist
+admin/.env
+admin/bun.lockb.orig
+
+# Editor / OS
+.DS_Store
+.idea
+.vscode
+*.swp
