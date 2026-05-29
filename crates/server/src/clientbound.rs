@@ -340,6 +340,16 @@ pub fn death_combat_event(player_entity_id: i32, message: &Json) -> BytesMut {
     b
 }
 
+/// Ask the client to download and apply a server resource pack.
+pub fn resource_pack(url: &str, hash: &str, forced: bool) -> BytesMut {
+    let mut b = pkt(play_cb::RESOURCE_PACK);
+    b.write_string(url);
+    b.write_string(hash);
+    b.write_bool(forced);
+    b.write_bool(false); // no prompt message
+    b
+}
+
 /// Respawn the player into a (re)loaded world in dimension `dim`.
 pub fn respawn(dim: u8, gamemode: u8, is_flat: bool) -> BytesMut {
     let mut b = pkt(play_cb::RESPAWN);

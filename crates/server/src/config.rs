@@ -80,6 +80,8 @@ pub struct ServerConfig {
     /// Operator player names allowed to run cheat commands. Empty = everyone
     /// is an operator (convenient for local/demo use).
     pub ops: Vec<String>,
+    /// Optional resource-pack URL offered to clients on join.
+    pub resource_pack: String,
     /// Enable protocol encryption and Mojang authentication. Requires outbound
     /// access to sessionserver.mojang.com; falls back to the client-supplied
     /// name if that lookup is unavailable.
@@ -136,6 +138,7 @@ impl Default for ServerConfig {
             gamemode: "creative".into(),
             ops: Vec::new(),
             online_mode: false,
+            resource_pack: String::new(),
         }
     }
 }

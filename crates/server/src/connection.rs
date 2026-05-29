@@ -306,6 +306,9 @@ where
         &text::colored("cubeplane", "gold"),
         &text::colored("Rust engine · JS mods", "gray"),
     ));
+    if !shared.config.server.resource_pack.is_empty() {
+        player.send(cb::resource_pack(&shared.config.server.resource_pack, "", false));
+    }
     player.send(cb::init_world_border(shared.config.world.border_diameter));
     if shared.raining() {
         player.send(cb::game_event(2, 0.0)); // begin raining

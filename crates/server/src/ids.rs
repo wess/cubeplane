@@ -86,6 +86,7 @@ pub mod play_cb {
     pub const PLAYER_INFO_UPDATE: i32 = 0x3a;
     pub const SYNC_POSITION: i32 = 0x3c;
     pub const REMOVE_ENTITIES: i32 = 0x3e;
+    pub const RESOURCE_PACK: i32 = 0x40;
     pub const RESPAWN: i32 = 0x41;
     pub const ENTITY_HEAD_ROTATION: i32 = 0x42;
     pub const SET_HELD_ITEM: i32 = 0x4d;

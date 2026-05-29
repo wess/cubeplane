@@ -17,6 +17,8 @@ ops = []
 # Enable protocol encryption + Mojang auth (needs outbound network; falls back
 # to the client-supplied name if the session server is unreachable).
 online_mode = false
+# Optional resource pack URL offered to clients on join.
+resource_pack = ""
 
 [world]
 # One of: terrain (value-noise hills) or flat (superflat).
@@ -32,6 +34,8 @@ format = "delta"
 keep_inventory = false
 # Spawn hostile mobs at night (otherwise only passive animals appear).
 spawn_hostiles = true
+# World border diameter in blocks (default effectively unlimited).
+border_diameter = 60000000.0
 
 [mods]
 enabled = true
