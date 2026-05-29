@@ -108,12 +108,12 @@ async fn game_loop(shared: Arc<Shared>) {
         ticks += 1;
 
         // One mod tick per second keeps the JS bridge lightly loaded.
-        if ticks % 20 == 0 {
+        if ticks.is_multiple_of(20) {
             shared.fire_mod(ModEvent::Tick { tick: ticks / 20 });
         }
 
         // Keep-alive and world time every 10 seconds.
-        if ticks % 200 == 0 {
+        if ticks.is_multiple_of(200) {
             let time_of_day = (ticks as i64) % 24_000;
             shared.broadcast(clientbound::keep_alive(ticks as i64));
             shared.broadcast(clientbound::update_time(ticks as i64, time_of_day));

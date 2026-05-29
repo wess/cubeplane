@@ -188,10 +188,7 @@ async fn play(
     shared.add_player(player.clone());
 
     // Tell the newcomer about everyone (including themselves).
-    let mut entries: Vec<cb::PlayerListEntry> = existing
-        .iter()
-        .map(|p| list_entry(p))
-        .collect();
+    let mut entries: Vec<cb::PlayerListEntry> = existing.iter().map(list_entry).collect();
     entries.push(list_entry(&player));
     player.send(cb::player_info_add(&entries));
 

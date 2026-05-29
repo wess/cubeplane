@@ -86,8 +86,8 @@ pub fn join_game(
     b.write_string(registry::DIMENSION_NAME);
     b.write_i64(0); // hashed seed
     b.write_varint(max_players);
-    b.write_varint(view_distance);
-    b.write_varint(view_distance.min(view_distance)); // simulation distance
+    b.write_varint(view_distance); // view distance
+    b.write_varint(view_distance); // simulation distance
     b.write_bool(false); // reduced debug info
     b.write_bool(true); // enable respawn screen
     b.write_bool(false); // is debug

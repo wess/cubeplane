@@ -156,7 +156,7 @@ fn bits_for(len: usize) -> usize {
 /// (the compact format used since Minecraft 1.16).
 fn write_packed(buf: &mut BytesMut, values: &[u32], bits: usize) {
     let per_long = 64 / bits;
-    let long_count = (values.len() + per_long - 1) / per_long;
+    let long_count = values.len().div_ceil(per_long);
     buf.write_varint(long_count as i32);
     let mut idx = 0;
     for _ in 0..long_count {
@@ -206,7 +206,7 @@ impl Chunk {
     }
 
     fn section_of(&self, y: i32) -> Option<(usize, usize)> {
-        if y < MIN_Y || y >= MIN_Y + WORLD_HEIGHT {
+        if !(MIN_Y..MIN_Y + WORLD_HEIGHT).contains(&y) {
             return None;
         }
         let rel = (y - MIN_Y) as usize;
@@ -280,7 +280,7 @@ pub struct LightData {
 /// Pack `values` (each `bits` wide) into i64s without spanning longs.
 fn pack_to_longs(values: &[u32], bits: usize) -> Vec<i64> {
     let per_long = 64 / bits;
-    let long_count = (values.len() + per_long - 1) / per_long;
+    let long_count = values.len().div_ceil(per_long);
     let mut out = Vec::with_capacity(long_count);
     let mut idx = 0;
     for _ in 0..long_count {

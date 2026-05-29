@@ -5,7 +5,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 /// Top-level configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
     pub server: ServerConfig,
@@ -51,17 +51,6 @@ pub struct ControlConfig {
     pub port: u16,
     /// Optional bearer token required by the control API.
     pub token: Option<String>,
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Config {
-            server: ServerConfig::default(),
-            world: WorldConfig::default(),
-            mods: ModsConfig::default(),
-            control: ControlConfig::default(),
-        }
-    }
 }
 
 impl Default for ServerConfig {
