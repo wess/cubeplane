@@ -75,7 +75,7 @@ impl Inventory {
     /// Add an item, merging into existing stacks then filling empty hotbar/main
     /// slots. Returns the leftover count that didn't fit (0 if all stored).
     pub fn add(&mut self, id: i32, mut count: u8) -> u8 {
-        let max = item::def(id).map(|d| d.max_stack).unwrap_or(64);
+        let max = item::max_stack(id);
         // First, top up existing stacks of the same item.
         for slot in HOTBAR.chain(MAIN) {
             if count == 0 {

@@ -67,7 +67,7 @@ pub fn dispatch(shared: &Arc<Shared>, player: &Player, name: &str, args: &[Strin
             if !require_op(player, op) {
                 return true;
             }
-            match args.first().and_then(|n| item::by_name(n)) {
+            match args.first().and_then(|n| item::id_any(n)) {
                 Some(id) => {
                     let count: u8 = args.get(1).and_then(|c| c.parse().ok()).unwrap_or(1);
                     player.give(id, count);

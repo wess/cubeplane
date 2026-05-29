@@ -124,20 +124,57 @@ pub fn by_name(name: &str) -> Option<i32> {
     TABLE.iter().find(|d| d.name == key).map(|d| d.id)
 }
 
-/// The item that drops when a block of `state` is broken, if any.
+/// The item that drops when a block of `state` is broken, if any. Falls back to
+/// the full registry: an item whose name matches the block's name.
 pub fn item_for_block(state: u16) -> Option<i32> {
-    TABLE.iter().find_map(|d| match d.kind {
+    if let Some(id) = TABLE.iter().find_map(|d| match d.kind {
         ItemKind::Block(s) if s == state => Some(d.id),
         _ => None,
-    })
+    }) {
+        return Some(id);
+    }
+    let name = cubeplane_world::block::info(state).name;
+    id_any(name)
 }
 
-/// The block state an item places, if it is placeable.
+/// The block state a curated item places, if it is placeable.
 pub fn block_for_item(id: i32) -> Option<u16> {
     match def(id)?.kind {
         ItemKind::Block(state) => Some(state),
         _ => None,
     }
+}
+
+/// The block state any item places: curated mapping first, otherwise an item
+/// whose name matches a block (covers every block item in the game).
+pub fn block_state_for_item(id: i32) -> Option<u16> {
+    block_for_item(id).or_else(|| cubeplane_world::block::state_by_name(name_of(id)?))
+}
+
+/// Maximum stack size for any item (full registry; defaults to 64).
+pub fn max_stack(id: i32) -> u8 {
+    if let Some(d) = def(id) {
+        return d.max_stack;
+    }
+    crate::items_table::ITEMS
+        .binary_search_by(|r| r.id.cmp(&id))
+        .ok()
+        .map(|i| crate::items_table::ITEMS[i].stack)
+        .unwrap_or(64)
+}
+
+/// Full item name lookup (every 1.20.1 item).
+pub fn name_of(id: i32) -> Option<&'static str> {
+    crate::items_table::ITEMS
+        .binary_search_by(|r| r.id.cmp(&id))
+        .ok()
+        .map(|i| crate::items_table::ITEMS[i].name)
+}
+
+/// Full item id lookup by name (every 1.20.1 item).
+pub fn id_any(name: &str) -> Option<i32> {
+    let key = name.strip_prefix("minecraft:").unwrap_or(name);
+    crate::items_table::ITEMS.iter().find(|r| r.name == key).map(|r| r.id)
 }
 
 /// All curated `(name, id)` pairs, for the mod/command APIs.

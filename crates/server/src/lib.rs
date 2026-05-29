@@ -18,6 +18,7 @@ mod entity;
 mod ids;
 mod inventory;
 mod item;
+mod items_table;
 mod mobs;
 mod mod_actions;
 mod persistence;

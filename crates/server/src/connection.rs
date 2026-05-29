@@ -648,7 +648,7 @@ fn respawn_player(
 fn try_open_container(shared: &Arc<Shared>, player: &Player, x: i32, y: i32, z: i32) -> bool {
     let is_chest = {
         let mut w = shared.world.lock().unwrap();
-        w.get_block(x, y, z) == cubeplane_world::block::CHEST
+        cubeplane_world::block::info(w.get_block(x, y, z)).name == "chest"
     };
     if !is_chest {
         return false;
@@ -707,7 +707,7 @@ fn break_block(shared: &Arc<Shared>, player: &Player, x: i32, y: i32, z: i32, cr
     shared.broadcast(cb::block_update(x, y, z, cubeplane_world::block::AIR));
 
     // Breaking a chest spills its contents and removes the block entity.
-    if previous == cubeplane_world::block::CHEST {
+    if cubeplane_world::block::info(previous).name == "chest" {
         if let Some(items) = shared.remove_container((x, y, z)) {
             for st in items {
                 if !st.is_empty() {
@@ -734,10 +734,12 @@ fn break_block(shared: &Arc<Shared>, player: &Player, x: i32, y: i32, z: i32, cr
 fn place_block(shared: &Arc<Shared>, player: &Player, x: i32, y: i32, z: i32, face: i32) {
     let held = player.state().held_slot;
     let stack = player.inventory(|inv| inv.held(held));
-    // Only place if the held item maps to a block.
-    let Some(state) = item::block_for_item(stack.id) else {
+    // Only place if the held item maps to a block (full registry).
+    let Some(base) = item::block_state_for_item(stack.id) else {
         return;
     };
+    // Orient the block from the clicked face and the player's yaw.
+    let state = cubeplane_world::block::place_state(base, face, player.state().yaw);
 
     let (dx, dy, dz) = match face {
         0 => (0, -1, 0),
@@ -756,7 +758,7 @@ fn place_block(shared: &Arc<Shared>, player: &Player, x: i32, y: i32, z: i32, fa
     shared.broadcast(cb::block_update(px, py, pz, state));
 
     // Placing a chest creates its (empty) container block entity.
-    if state == cubeplane_world::block::CHEST {
+    if cubeplane_world::block::info(state).name == "chest" {
         shared.ensure_container((px, py, pz));
     }
 
@@ -767,7 +769,7 @@ fn place_block(shared: &Arc<Shared>, player: &Player, x: i32, y: i32, z: i32, fa
         player.send(cb::set_slot(0, 0, slot as i16, after));
     }
 
-    let name = item::def(stack.id).map(|d| d.name).unwrap_or("block");
+    let name = item::name_of(stack.id).unwrap_or("block");
     shared.fire_mod(ModEvent::BlockPlace {
         player: player.name.clone(),
         x: px,
