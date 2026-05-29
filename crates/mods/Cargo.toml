@@ -9,6 +9,7 @@ description = "QuickJS-powered JavaScript mod runtime for cubeplane"
 
 [dependencies]
 rquickjs = { workspace = true }
+tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 anyhow = { workspace = true }

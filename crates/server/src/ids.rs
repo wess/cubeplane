@@ -1,0 +1,80 @@
+//! Packet id constants for Minecraft Java protocol **763** (1.20.1).
+//!
+//! Values were extracted from the PrismarineJS `minecraft-data` protocol
+//! definition for `pc/1.20`. Ids are state- and direction-relative.
+
+/// Handshaking, serverbound.
+pub mod handshake_sb {
+    pub const SET_PROTOCOL: i32 = 0x00;
+}
+
+/// Status, clientbound.
+pub mod status_cb {
+    pub const SERVER_INFO: i32 = 0x00;
+    pub const PONG: i32 = 0x01;
+}
+
+/// Status, serverbound.
+pub mod status_sb {
+    pub const REQUEST: i32 = 0x00;
+    pub const PING: i32 = 0x01;
+}
+
+/// Login, clientbound.
+pub mod login_cb {
+    pub const DISCONNECT: i32 = 0x00;
+    pub const SUCCESS: i32 = 0x02;
+    pub const SET_COMPRESSION: i32 = 0x03;
+}
+
+/// Login, serverbound.
+pub mod login_sb {
+    pub const LOGIN_START: i32 = 0x00;
+}
+
+/// Play, clientbound.
+pub mod play_cb {
+    pub const SPAWN_PLAYER: i32 = 0x03;
+    pub const ACKNOWLEDGE_BLOCK_CHANGE: i32 = 0x06;
+    pub const BLOCK_UPDATE: i32 = 0x0a;
+    pub const DISCONNECT: i32 = 0x1a;
+    pub const GAME_EVENT: i32 = 0x1f;
+    pub const KEEP_ALIVE: i32 = 0x23;
+    pub const CHUNK_DATA: i32 = 0x24;
+    pub const LOGIN: i32 = 0x28;
+    pub const ENTITY_POSITION: i32 = 0x2b;
+    pub const ENTITY_POSITION_ROTATION: i32 = 0x2c;
+    pub const ENTITY_ROTATION: i32 = 0x2d;
+    pub const PLAYER_ABILITIES: i32 = 0x34;
+    pub const PLAYER_CHAT: i32 = 0x35;
+    pub const PLAYER_INFO_REMOVE: i32 = 0x39;
+    pub const PLAYER_INFO_UPDATE: i32 = 0x3a;
+    pub const SYNC_POSITION: i32 = 0x3c;
+    pub const REMOVE_ENTITIES: i32 = 0x3e;
+    pub const ENTITY_HEAD_ROTATION: i32 = 0x42;
+    pub const ENTITY_TELEPORT: i32 = 0x68;
+    pub const SET_HELD_ITEM: i32 = 0x4d;
+    pub const SET_CENTER_CHUNK: i32 = 0x4e;
+    pub const SPAWN_POSITION: i32 = 0x50;
+    pub const UPDATE_TIME: i32 = 0x5e;
+    pub const SYSTEM_CHAT: i32 = 0x64;
+}
+
+/// Play, serverbound.
+pub mod play_sb {
+    pub const TELEPORT_CONFIRM: i32 = 0x00;
+    pub const CHAT_COMMAND: i32 = 0x04;
+    pub const CHAT_MESSAGE: i32 = 0x05;
+    pub const CLIENT_COMMAND: i32 = 0x07;
+    pub const CLIENT_SETTINGS: i32 = 0x08;
+    pub const KEEP_ALIVE: i32 = 0x12;
+    pub const POSITION: i32 = 0x14;
+    pub const POSITION_LOOK: i32 = 0x15;
+    pub const LOOK: i32 = 0x16;
+    pub const FLYING: i32 = 0x17;
+    pub const HELD_ITEM_SLOT: i32 = 0x28;
+    pub const BLOCK_DIG: i32 = 0x1d;
+    pub const ARM_ANIMATION: i32 = 0x2f;
+    pub const BLOCK_PLACE: i32 = 0x31;
+    pub const USE_ITEM: i32 = 0x32;
+}
