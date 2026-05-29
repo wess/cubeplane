@@ -45,6 +45,19 @@ pub fn translate_clientbound(payload: BytesMut, protocol: i32) -> BytesMut {
 fn rewrite_clientbound_body(canonical_id: i32, protocol: i32, body: &[u8]) -> Option<Vec<u8>> {
     match protocol {
         PROTO_1_20_2 => rewrite_clientbound_body_764(canonical_id, body),
+        // 1.20.3/4 shares 1.20.2's body layouts plus the JSON→NBT text migration.
+        PROTO_1_20_3 => {
+            // system_chat (763 0x64): content becomes a network NBT text component.
+            if canonical_id == 0x64 {
+                use cubeplane_protocol::ProtoRead;
+                let mut r = BytesMut::from(body);
+                let json = r.read_string().ok()?;
+                let mut out = chat_json_to_anonymous_nbt(&json)?;
+                out.extend_from_slice(&r); // trailing isActionBar bool
+                return Some(out);
+            }
+            rewrite_clientbound_body_764(canonical_id, body)
+        }
         // 1.19.4 and 1.19.3 share the same body rewrites; 1.19.3 adds one more.
         PROTO_1_19_4 => rewrite_clientbound_body_119x(canonical_id, body),
         PROTO_1_19_3 => {
@@ -302,6 +315,7 @@ pub fn translate_serverbound(payload: BytesMut, protocol: i32) -> BytesMut {
 fn remap_play_serverbound(wire_id: i32, protocol: i32) -> i32 {
     match protocol {
         PROTO_1_20_2 => apply_map(wire_id, SB_764_TO_763),
+        PROTO_1_20_3 => apply_map(wire_id, SB_765_TO_763),
         PROTO_1_19_3 => apply_map(wire_id, SB_761_TO_763),
         _ => wire_id,
     }
@@ -312,6 +326,7 @@ fn remap_play_serverbound(wire_id: i32, protocol: i32) -> i32 {
 fn remap_play_clientbound(canonical_id: i32, protocol: i32) -> i32 {
     match protocol {
         PROTO_1_20_2 => apply_map(canonical_id, CB_763_TO_764),
+        PROTO_1_20_3 => apply_map(canonical_id, CB_763_TO_765),
         PROTO_1_19_3 => apply_map(canonical_id, CB_763_TO_761),
         // 1.19.4 play ids are identical to 763.
         _ => canonical_id,
@@ -324,6 +339,8 @@ const PROTO_1_20_2: i32 = 764;
 const PROTO_1_19_4: i32 = 762;
 /// Protocol number for Minecraft 1.19.3.
 const PROTO_1_19_3: i32 = 761;
+/// Protocol number for Minecraft 1.20.3 / 1.20.4.
+const PROTO_1_20_3: i32 = 765;
 
 // Verified play packet-id maps between protocol 763 (1.20.1) and 764 (1.20.2),
 // generated from PrismarineJS minecraft-data (pc/1.20 and pc/1.20.2). These cover
@@ -392,6 +409,87 @@ const SB_761_TO_763: &[(i32, i32)] = &[
     (0x19, 0x1a), (0x1a, 0x1b), (0x1b, 0x1c), (0x1c, 0x1d), (0x1d, 0x1e), (0x1e, 0x1f),
     (0x1f, 0x20), (0x20, 0x6),
 ];
+
+// Verified play packet-id maps between protocol 763 (1.20.1) and 765 (1.20.3/4),
+// generated from PrismarineJS minecraft-data (pc/1.20 and pc/1.20.3).
+const CB_763_TO_765: &[(i32, i32)] = &[
+    (0x4, 0x3), (0x5, 0x4), (0x6, 0x5), (0x7, 0x6), (0x8, 0x7), (0x9, 0x8), (0xa, 0x9),
+    (0xb, 0xa), (0xc, 0xb), (0xd, 0xe), (0xe, 0xf), (0xf, 0x10), (0x10, 0x11), (0x11, 0x12),
+    (0x12, 0x13), (0x13, 0x14), (0x14, 0x15), (0x15, 0x16), (0x16, 0x17), (0x17, 0x18),
+    (0x18, 0x19), (0x19, 0x1a), (0x1a, 0x1b), (0x1b, 0x1c), (0x1c, 0x1d), (0x1d, 0x1e),
+    (0x1e, 0x1f), (0x1f, 0x20), (0x20, 0x21), (0x21, 0x22), (0x22, 0x23), (0x23, 0x24),
+    (0x24, 0x25), (0x25, 0x26), (0x26, 0x27), (0x27, 0x28), (0x28, 0x29), (0x29, 0x2a),
+    (0x2a, 0x2b), (0x2b, 0x2c), (0x2c, 0x2d), (0x2d, 0x2e), (0x2e, 0x2f), (0x2f, 0x30),
+    (0x30, 0x31), (0x31, 0x32), (0x32, 0x33), (0x33, 0x35), (0x34, 0x36), (0x35, 0x37),
+    (0x36, 0x38), (0x37, 0x39), (0x38, 0x3a), (0x39, 0x3b), (0x3a, 0x3c), (0x3b, 0x3d),
+    (0x3c, 0x3e), (0x3d, 0x3f), (0x3e, 0x40), (0x3f, 0x41), (0x41, 0x45), (0x42, 0x46),
+    (0x43, 0x47), (0x44, 0x48), (0x45, 0x49), (0x46, 0x4a), (0x47, 0x4b), (0x48, 0x4c),
+    (0x49, 0x4d), (0x4a, 0x4e), (0x4b, 0x4f), (0x4c, 0x50), (0x4d, 0x51), (0x4e, 0x52),
+    (0x4f, 0x53), (0x50, 0x54), (0x51, 0x55), (0x52, 0x56), (0x53, 0x57), (0x54, 0x58),
+    (0x55, 0x59), (0x56, 0x5a), (0x57, 0x5b), (0x58, 0x5c), (0x59, 0x5d), (0x5a, 0x5e),
+    (0x5b, 0x5f), (0x5c, 0x60), (0x5d, 0x61), (0x5e, 0x62), (0x5f, 0x63), (0x60, 0x64),
+    (0x61, 0x65), (0x62, 0x66), (0x63, 0x68), (0x64, 0x69), (0x65, 0x6a), (0x66, 0x6b),
+    (0x67, 0x6c), (0x68, 0x6d), (0x69, 0x70), (0x6a, 0x71), (0x6c, 0x72), (0x6d, 0x73),
+    (0x6e, 0x74),
+];
+
+const SB_765_TO_763: &[(i32, i32)] = &[
+    (0x8, 0x7), (0x9, 0x8), (0xa, 0x9), (0xc, 0xa), (0xd, 0xb), (0xe, 0xc), (0x10, 0xd),
+    (0x11, 0xe), (0x12, 0xf), (0x13, 0x10), (0x14, 0x11), (0x15, 0x12), (0x16, 0x13),
+    (0x17, 0x14), (0x18, 0x15), (0x19, 0x16), (0x1a, 0x17), (0x1b, 0x18), (0x1c, 0x19),
+    (0x1d, 0x1a), (0x1f, 0x1b), (0x20, 0x1c), (0x21, 0x1d), (0x22, 0x1e), (0x23, 0x1f),
+    (0x24, 0x20), (0x25, 0x21), (0x26, 0x22), (0x27, 0x23), (0x28, 0x24), (0x29, 0x25),
+    (0x2a, 0x26), (0x2b, 0x27), (0x2c, 0x28), (0x2d, 0x29), (0x2e, 0x2a), (0x2f, 0x2b),
+    (0x30, 0x2c), (0x31, 0x2d), (0x32, 0x2e), (0x33, 0x2f), (0x34, 0x30), (0x35, 0x31),
+    (0x36, 0x32),
+];
+
+/// Convert a JSON chat component string (763 wire form) into the nameless network
+/// NBT text component 1.20.3+ uses. Our server only emits chat as JSON objects,
+/// so this handles object/array/scalar nodes recursively. Returns the anonymous
+/// NBT bytes.
+fn chat_json_to_anonymous_nbt(json: &str) -> Option<Vec<u8>> {
+    let v: serde_json::Value = serde_json::from_str(json).ok()?;
+    let obj = v.as_object()?;
+    let mut nbt = cubeplane_nbt::Nbt::compound();
+    for (k, val) in obj {
+        if let Some(nv) = json_value_to_nbt(val) {
+            nbt = nbt.put(k, nv);
+        }
+    }
+    let named = nbt.to_bytes_named(""); // 0x0a 00 00 <payload>
+    let mut out = Vec::with_capacity(named.len());
+    out.push(0x0a);
+    out.extend_from_slice(&named[3..]); // strip the empty name → anonymous
+    Some(out)
+}
+
+/// Recursively convert a serde_json chat node into an NBT value.
+fn json_value_to_nbt(v: &serde_json::Value) -> Option<cubeplane_nbt::Value> {
+    use cubeplane_nbt::Value as N;
+    Some(match v {
+        serde_json::Value::Bool(b) => N::Byte(if *b { 1 } else { 0 }),
+        serde_json::Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                N::Int(i as i32)
+            } else {
+                N::Double(n.as_f64()?)
+            }
+        }
+        serde_json::Value::String(s) => N::String(s.clone()),
+        serde_json::Value::Array(a) => N::List(a.iter().filter_map(json_value_to_nbt).collect()),
+        serde_json::Value::Object(o) => {
+            let mut nbt = cubeplane_nbt::Nbt::compound();
+            for (k, val) in o {
+                if let Some(nv) = json_value_to_nbt(val) {
+                    nbt = nbt.put(k, nv);
+                }
+            }
+            nbt.into_value()
+        }
+        serde_json::Value::Null => return None,
+    })
+}
 
 /// Apply a sparse `(from, to)` id remap, leaving unlisted ids unchanged. Helper
 /// for per-version maps.
@@ -603,6 +701,19 @@ mod tests {
         let mut out = Vec::new();
         assert_eq!(named_root_nbt_to_anonymous(&[0x00], &mut out), Some(1));
         assert_eq!(out, vec![0x00]);
+    }
+
+    #[test]
+    fn json_chat_converts_to_anonymous_nbt() {
+        // A typical server chat component round-trips into a nameless compound
+        // whose payload parses as valid NBT.
+        let out = chat_json_to_anonymous_nbt(r#"{"text":"hi","color":"red"}"#).unwrap();
+        assert_eq!(out[0], 0x0a, "anonymous root compound tag");
+        // The converted payload is a valid NBT body (parseable by the converter).
+        let consumed = named_root_nbt_to_anonymous(&out, &mut Vec::new()).unwrap();
+        assert_eq!(consumed, out.len());
+        // Nested extra lists are handled.
+        assert!(chat_json_to_anonymous_nbt(r#"{"text":"","extra":[{"text":"a"}]}"#).is_some());
     }
 
     #[test]

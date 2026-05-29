@@ -75,6 +75,13 @@ const TREE: &[Node] = &[
     },
 ];
 
+/// Whether we emit an advancements packet for a client protocol. 1.20.3+ (765+)
+/// encodes advancement display text as NBT, which this builder doesn't yet
+/// produce, so we skip the (cosmetic) tree for those versions.
+pub fn supported(protocol: i32) -> bool {
+    (761..=764).contains(&protocol)
+}
+
 /// The criterion name for an advancement (the key's last path segment).
 fn criterion(key: &str) -> &str {
     key.rsplit(':').next().unwrap_or(key)

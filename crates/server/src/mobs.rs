@@ -80,6 +80,7 @@ pub fn tick(shared: &Arc<Shared>, tick: u64, is_night: bool) {
                     shared.stat_mob_killed(p.entity_id, mob.kind.type_id());
                     // "Monster Hunter": award on a hostile kill, popping a toast.
                     if mob.kind.hostile()
+                        && crate::advancements::supported(p.protocol)
                         && shared.earn_advancement(p.entity_id, "cubeplane:kill")
                     {
                         let earned = shared.earned_advancements(p.entity_id);
