@@ -42,6 +42,33 @@ pub fn translate_clientbound(payload: BytesMut, protocol: i32) -> BytesMut {
     out
 }
 
+/// Translate an inbound serverbound play payload from `protocol`'s wire format
+/// to the canonical 763 layout the parser expects, by rewriting the leading
+/// packet-id varint. The mirror of [`translate_clientbound`].
+pub fn translate_serverbound(payload: BytesMut, protocol: i32) -> BytesMut {
+    if protocol == PROTOCOL_VERSION {
+        return payload;
+    }
+    let mut body = payload;
+    let wire = match body.read_varint() {
+        Ok(id) => id,
+        Err(_) => return body,
+    };
+    let canonical = remap_play_serverbound(wire, protocol);
+    let mut out = BytesMut::with_capacity(body.len() + 3);
+    out.write_varint(canonical);
+    out.extend_from_slice(&body);
+    out
+}
+
+/// Map a target protocol's serverbound play wire id back to the canonical (763)
+/// id. Unknown/unsupported protocols fall back to identity.
+fn remap_play_serverbound(wire_id: i32, protocol: i32) -> i32 {
+    // Mirror of remap_play_clientbound: per-version inbound maps plug in here.
+    let _ = protocol;
+    wire_id
+}
+
 /// Map a canonical (763) clientbound play packet id to the wire id for a target
 /// protocol. Unknown/unsupported protocols fall back to identity.
 fn remap_play_clientbound(canonical_id: i32, protocol: i32) -> i32 {
@@ -93,6 +120,18 @@ mod tests {
         assert_eq!(apply_map(0x10, &map), 0x12);
         assert_eq!(apply_map(0x20, &map), 0x1f);
         assert_eq!(apply_map(0x30, &map), 0x30); // unlisted → unchanged
+    }
+
+    #[test]
+    fn serverbound_passthrough_and_identity() {
+        let p = payload(0x14, &[5, 6]);
+        let original = p.clone();
+        assert_eq!(translate_serverbound(p, PROTOCOL_VERSION), original);
+        // Unknown protocol uses identity in both directions.
+        let p = payload(0x14, &[5, 6]);
+        let mut rd = translate_serverbound(p, 700);
+        assert_eq!(rd.read_varint().unwrap(), 0x14);
+        assert_eq!(&rd[..], &[5, 6]);
     }
 
     #[test]

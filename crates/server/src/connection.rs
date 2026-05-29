@@ -415,7 +415,7 @@ where
 
     // --- Main packet loop ----------------------------------------------------
     let mut last_center = (cx, cz);
-    let result = play_loop(&mut reader, &shared, &player, threshold, &mut loaded, &mut last_center).await;
+    let result = play_loop(&mut reader, &shared, &player, threshold, protocol, &mut loaded, &mut last_center).await;
 
     // --- Cleanup -------------------------------------------------------------
     if shared.config.world.save {
@@ -442,6 +442,7 @@ async fn play_loop<R: AsyncRead + Unpin>(
     shared: &Arc<Shared>,
     player: &Player,
     threshold: i32,
+    protocol: i32,
     loaded: &mut HashSet<(i32, i32)>,
     last_center: &mut (i32, i32),
 ) -> Result<()> {
@@ -460,6 +461,8 @@ async fn play_loop<R: AsyncRead + Unpin>(
         if frame.is_empty() {
             continue;
         }
+        // Translate the client's wire packet to the canonical 763 layout.
+        let frame = crate::version::translate_serverbound(frame, protocol);
         let raw = RawPacket::parse(frame)?;
         let play = serverbound::parse_play(raw)?;
         match play {
