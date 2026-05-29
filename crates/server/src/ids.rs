@@ -52,6 +52,7 @@ pub mod play_cb {
     pub const EXPLOSION: i32 = 0x1d;
     pub const WORLD_PARTICLES: i32 = 0x26;
     pub const OPEN_WINDOW: i32 = 0x30;
+    pub const OPEN_SIGN_EDITOR: i32 = 0x31;
     pub const SET_ACTION_BAR: i32 = 0x46;
     pub const ENTITY_METADATA: i32 = 0x52;
     pub const SET_EXPERIENCE: i32 = 0x56;
@@ -112,6 +113,7 @@ pub mod play_sb {
     pub const VEHICLE_MOVE: i32 = 0x18;
     pub const STEER_VEHICLE: i32 = 0x1f;
     pub const SELECT_TRADE: i32 = 0x26;
+    pub const UPDATE_SIGN: i32 = 0x2e;
     pub const WINDOW_CLICK: i32 = 0x0b;
     pub const CLOSE_WINDOW: i32 = 0x0c;
     pub const SET_CREATIVE_SLOT: i32 = 0x2b;

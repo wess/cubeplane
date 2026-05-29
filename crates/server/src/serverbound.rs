@@ -61,6 +61,10 @@ pub enum Play {
     VehicleMove { x: f64, y: f64, z: f64, yaw: f32, pitch: f32 },
     /// Steering input; `jump` is used to dismount.
     SteerVehicle { jump: bool },
+    /// Selected a villager trade offer by index.
+    SelectTrade { index: i32 },
+    /// Finished editing a sign.
+    UpdateSign { x: i32, y: i32, z: i32, lines: [String; 4] },
     /// A serverbound packet we recognise the id of but do not act on.
     Ignored,
 }
@@ -119,6 +123,13 @@ pub fn parse_play(mut raw: RawPacket) -> Result<Play> {
             let _forward = b.read_f32()?;
             let jump = b.read_u8()? & 0x01 != 0;
             Play::SteerVehicle { jump }
+        }
+        play_sb::SELECT_TRADE => Play::SelectTrade { index: b.read_varint()? },
+        play_sb::UPDATE_SIGN => {
+            let (x, y, z) = b.read_position()?;
+            let _front = b.read_bool()?;
+            let lines = [b.read_string()?, b.read_string()?, b.read_string()?, b.read_string()?];
+            Play::UpdateSign { x, y, z, lines }
         }
         play_sb::WINDOW_CLICK => {
             let window_id = b.read_u8()?;

@@ -463,6 +463,14 @@ pub fn trade_list(window_id: i32, offers: &[(ItemStack, ItemStack, ItemStack)]) 
     b
 }
 
+/// Open the sign-edit screen for a freshly-placed sign.
+pub fn open_sign_editor(x: i32, y: i32, z: i32) -> BytesMut {
+    let mut b = pkt(play_cb::OPEN_SIGN_EDITOR);
+    b.write_position(x, y, z);
+    b.write_bool(true); // front text
+    b
+}
+
 /// Open a container window. `inv_type` 2 = generic 9×3 (single chest).
 pub fn open_window(window_id: i32, inv_type: i32, title: &Json) -> BytesMut {
     let mut b = pkt(play_cb::OPEN_WINDOW);
@@ -660,27 +668,53 @@ pub fn particle(particle_id: i32, x: f64, y: f64, z: f64, spread: f32, count: i3
     b
 }
 
-/// Declare the available commands as a flat graph so the client offers
-/// tab-completion and colours known commands. Each name becomes an executable
-/// literal child of the root node.
-pub fn declare_commands(names: &[&str]) -> BytesMut {
+/// Declare the available commands as a Brigadier graph so the client offers
+/// tab-completion and colours known commands. Each entry is `(name, has_args)`;
+/// commands with args get a greedy-string argument child so free-text after the
+/// command name is accepted.
+pub fn declare_commands(commands: &[(&str, bool)]) -> BytesMut {
+    // Lay out nodes: 0 = root, then per command a literal node and (if it
+    // takes args) an argument node.
+    struct Node {
+        flags: u8,
+        children: Vec<i32>,
+        name: Option<String>,
+        parser: Option<()>, // present ⇒ brigadier:string (greedy)
+    }
+    let mut nodes: Vec<Node> = vec![Node { flags: 0x00, children: vec![], name: None, parser: None }];
+    let mut root_children = Vec::new();
+
+    for (name, has_args) in commands {
+        let arg_index = if *has_args {
+            // type=argument(2) | has_command(0x04)
+            nodes.push(Node { flags: 0x06, children: vec![], name: Some("args".into()), parser: Some(()) });
+            Some(nodes.len() as i32 - 1)
+        } else {
+            None
+        };
+        // type=literal(1) | has_command(0x04)
+        let children = arg_index.into_iter().collect();
+        nodes.push(Node { flags: 0x05, children, name: Some((*name).into()), parser: None });
+        root_children.push(nodes.len() as i32 - 1);
+    }
+    nodes[0].children = root_children;
+
     let mut b = pkt(play_cb::DECLARE_COMMANDS);
-    b.write_varint((names.len() + 1) as i32); // node count (root + literals)
-
-    // Node 0: root (type 0, no command), children = all literal nodes.
-    b.write_u8(0x00);
-    b.write_varint(names.len() as i32);
-    for i in 0..names.len() {
-        b.write_varint((i + 1) as i32);
+    b.write_varint(nodes.len() as i32);
+    for n in &nodes {
+        b.write_u8(n.flags);
+        b.write_varint(n.children.len() as i32);
+        for c in &n.children {
+            b.write_varint(*c);
+        }
+        if let Some(name) = &n.name {
+            b.write_string(name);
+        }
+        if n.parser.is_some() {
+            b.write_varint(5); // parser id 5 = brigadier:string
+            b.write_varint(2); // string mode 2 = greedy phrase
+        }
     }
-
-    // Literal, executable nodes.
-    for name in names {
-        b.write_u8(0x05); // type=literal(1) | has_command(0x04)
-        b.write_varint(0); // no children
-        b.write_string(name);
-    }
-
     b.write_varint(0); // root index
     b
 }

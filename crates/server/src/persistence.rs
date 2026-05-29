@@ -113,6 +113,25 @@ pub fn load_containers(dir: &Path) -> Vec<ContainerEntry> {
         .unwrap_or_default()
 }
 
+/// A sign entry: position and its four text lines.
+type SignEntry = ((i32, i32, i32), [String; 4]);
+
+fn signs_path(dir: &Path) -> PathBuf {
+    dir.join("signs.json")
+}
+
+pub fn save_signs(dir: &Path, entries: &[SignEntry]) -> io::Result<()> {
+    std::fs::create_dir_all(dir)?;
+    std::fs::write(signs_path(dir), serde_json::to_string(entries).map_err(io::Error::other)?)
+}
+
+pub fn load_signs(dir: &Path) -> Vec<SignEntry> {
+    std::fs::read_to_string(signs_path(dir))
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or_default()
+}
+
 /// World metadata persisted alongside chunks (time of day, etc.).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct WorldMeta {

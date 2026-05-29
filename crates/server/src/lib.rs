@@ -124,6 +124,11 @@ pub async fn run(config: Config) -> Result<()> {
                 .collect();
             shared.load_containers(map);
         }
+        // Restore signs.
+        let signs = persistence::load_signs(&save_dir);
+        if !signs.is_empty() {
+            shared.load_signs(signs.into_iter().collect());
+        }
         // Restore world clock and live entities.
         let meta = persistence::load_meta(&save_dir);
         if meta.time != 0 {
@@ -221,6 +226,9 @@ fn save_all(shared: &Arc<Shared>, save_dir: &std::path::Path, region: bool) {
     for player in shared.players() {
         let _ = persistence::save_player(save_dir, player.uuid, &player.snapshot_data());
     }
+
+    let signs: Vec<_> = shared.signs_snapshot().into_iter().collect();
+    let _ = persistence::save_signs(save_dir, &signs);
 
     let _ = persistence::save_entities(save_dir, &snapshot_entities(shared));
     let _ = persistence::save_meta(save_dir, &persistence::WorldMeta { time: shared.world_time() });

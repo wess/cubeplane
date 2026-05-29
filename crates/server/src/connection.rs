@@ -297,8 +297,10 @@ where
     }
     player.sync_inventory();
     player.send(cb::declare_commands(&[
-        "help", "list", "pos", "tp", "gamemode", "give", "time", "weather", "summon", "effect",
-        "heal", "kill", "clear", "xp", "vehicle",
+        ("help", false), ("list", false), ("pos", false), ("tp", true),
+        ("gamemode", true), ("give", true), ("time", true), ("weather", true),
+        ("summon", true), ("effect", true), ("heal", false), ("kill", false),
+        ("clear", false), ("xp", true), ("vehicle", true),
     ]));
     player.send(cb::tab_list_header(
         &text::colored("cubeplane", "gold"),
@@ -421,6 +423,9 @@ async fn play_loop<R: AsyncRead + Unpin>(
         let play = serverbound::parse_play(raw)?;
         match play {
             Play::SetPosition { x, y, z, on_ground } => {
+                if !accept_move(player, x, z) {
+                    continue;
+                }
                 player.update(|s| {
                     s.x = x;
                     s.y = y;
@@ -432,6 +437,9 @@ async fn play_loop<R: AsyncRead + Unpin>(
                 maybe_stream(shared, player, loaded, last_center);
             }
             Play::SetPositionRotation { x, y, z, yaw, pitch, on_ground } => {
+                if !accept_move(player, x, z) {
+                    continue;
+                }
                 player.update(|s| {
                     s.x = x;
                     s.y = y;
@@ -474,8 +482,11 @@ async fn play_loop<R: AsyncRead + Unpin>(
                 player.send(cb::acknowledge_block_change(sequence));
             }
             Play::BlockPlace { x, y, z, face, sequence } => {
-                // Interacting with a lever/chest takes priority over placing.
-                if !try_toggle_lever(shared, x, y, z) && !try_open_container(shared, player, x, y, z) {
+                // Interacting with a lever/chest/sign takes priority over placing.
+                if !try_toggle_lever(shared, x, y, z)
+                    && !try_open_container(shared, player, x, y, z)
+                    && !try_read_sign(shared, player, x, y, z)
+                {
                     place_block(shared, player, x, y, z, face);
                 }
                 player.send(cb::acknowledge_block_change(sequence));
@@ -484,12 +495,20 @@ async fn play_loop<R: AsyncRead + Unpin>(
                 try_eat(player);
             }
             Play::CreativeSlot { slot, stack } => {
-                if slot >= 0 {
+                // Direct slot edits are only legitimate in creative mode.
+                if slot >= 0 && player.gamemode() == 1 {
                     player.inventory(|inv| inv.set(slot as usize, stack));
                 }
             }
             Play::WindowClick { window_id, changed } => {
                 apply_window_click(shared, player, window_id, &changed);
+            }
+            Play::SelectTrade { index } => {
+                do_trade(player, index);
+            }
+            Play::UpdateSign { x, y, z, lines } => {
+                shared.set_sign((x, y, z), lines);
+                player.send(cb::system_chat(&text::colored("Sign saved.", "gray"), false));
             }
             Play::CloseWindow => {
                 player.update(|s| {
@@ -569,6 +588,23 @@ fn broadcast_move(shared: &Arc<Shared>, player: &Player) {
         cb::entity_teleport(player.entity_id, s.x, s.y, s.z, s.yaw, s.pitch, s.on_ground),
     );
     shared.broadcast_except(player.entity_id, cb::entity_head_rotation(player.entity_id, s.yaw));
+}
+
+/// Basic movement anti-cheat: reject implausible horizontal jumps (teleport /
+/// speed hacks) by snapping the player back to their last good position.
+/// Generous so legitimate sprinting/packets are never rejected.
+fn accept_move(player: &Player, x: f64, z: f64) -> bool {
+    if player.state().riding.is_some() {
+        return true; // vehicle movement is handled separately
+    }
+    let s = player.state();
+    let (dx, dz) = (x - s.x, z - s.z);
+    let limit = if player.gamemode() == 1 { 40.0 } else { 12.0 };
+    if dx * dx + dz * dz > limit * limit {
+        player.send(cb::sync_position(s.x, s.y, s.z, s.yaw, s.pitch, 0, 0));
+        return false;
+    }
+    true
 }
 
 /// Re-stream chunks if the player crossed a chunk boundary.
@@ -749,7 +785,7 @@ fn interact_entity(shared: &Arc<Shared>, player: &Player, target: i32) {
         if shared.ai_config().enabled {
             start_conversation(shared, player, target);
         } else {
-            open_merchant(shared, player);
+            open_merchant(player);
         }
     }
 }
@@ -851,27 +887,49 @@ fn talk_to_villager(shared: &Arc<Shared>, player: &Player, villager: i32, messag
     });
 }
 
-/// Open a villager trade window with a couple of sample offers.
-fn open_merchant(shared: &Arc<Shared>, player: &Player) {
-    let _ = shared;
+/// The (fixed) villager trade offers: `(input, output, input2)`.
+fn merchant_offers() -> Vec<(item::ItemStack, item::ItemStack, item::ItemStack)> {
     let emerald = item::id_any("emerald").unwrap_or(0);
     let bread = item::id_any("bread").unwrap_or(0);
     let stick = item::id_any("stick").unwrap_or(0);
-    let offers = vec![
-        (
-            item::ItemStack::new(emerald, 1),
-            item::ItemStack::new(bread, 6),
-            item::ItemStack::EMPTY,
-        ),
-        (
-            item::ItemStack::new(stick, 32),
-            item::ItemStack::new(emerald, 1),
-            item::ItemStack::EMPTY,
-        ),
-    ];
+    vec![
+        (item::ItemStack::new(emerald, 1), item::ItemStack::new(bread, 6), item::ItemStack::EMPTY),
+        (item::ItemStack::new(stick, 32), item::ItemStack::new(emerald, 1), item::ItemStack::EMPTY),
+    ]
+}
+
+/// Open a villager trade window.
+fn open_merchant(player: &Player) {
     player.update(|s| s.open_merchant = true);
     player.send(cb::open_window(2, 18, &text::plain("Villager"))); // 18 = merchant menu
-    player.send(cb::trade_list(2, &offers));
+    player.send(cb::trade_list(2, &merchant_offers()));
+}
+
+/// Execute a selected trade against the player's inventory.
+fn do_trade(player: &Player, index: i32) {
+    if !player.state().open_merchant {
+        return;
+    }
+    let offers = merchant_offers();
+    let Some((input, output, _)) = offers.get(index as usize) else {
+        return;
+    };
+    let traded = player.inventory(|inv| {
+        if inv.has(input.id, input.count) {
+            inv.remove(input.id, input.count);
+            inv.add(output.id, output.count);
+            true
+        } else {
+            false
+        }
+    });
+    if traded {
+        player.sync_inventory();
+        let s = player.state();
+        player.send(cb::sound_effect("entity.villager.yes", 6, s.x, s.y, s.z, 1.0, 1.0));
+    } else {
+        player.send(cb::system_chat(&text::colored("You don't have what that trade needs.", "red"), false));
+    }
 }
 
 /// Toggle a lever the player clicked, updating redstone. Returns true if a
@@ -889,6 +947,27 @@ fn try_toggle_lever(shared: &Arc<Shared>, x: i32, y: i32, z: i32) -> bool {
     }
     shared.broadcast(cb::block_update(x, y, z, toggled));
     crate::sim::redstone_update(shared, x, y, z);
+    true
+}
+
+/// Read (and re-open for editing) a sign the player clicked. Returns true if a
+/// sign was clicked.
+fn try_read_sign(shared: &Arc<Shared>, player: &Player, x: i32, y: i32, z: i32) -> bool {
+    let is_sign = {
+        let mut w = shared.world.lock().unwrap();
+        cubeplane_world::block::info(w.get_block(x, y, z)).name.ends_with("_sign")
+    };
+    if !is_sign {
+        return false;
+    }
+    match shared.sign((x, y, z)) {
+        Some(lines) => {
+            let text = lines.iter().filter(|l| !l.is_empty()).cloned().collect::<Vec<_>>().join(" / ");
+            let shown = if text.is_empty() { "(blank sign)".to_string() } else { text };
+            player.send(cb::system_chat(&text::colored(format!("Sign: {shown}"), "yellow"), false));
+        }
+        None => player.send(cb::open_sign_editor(x, y, z)),
+    }
     true
 }
 
@@ -976,6 +1055,10 @@ fn break_block(shared: &Arc<Shared>, player: &Player, x: i32, y: i32, z: i32, cr
             drops::spawn_item(shared, item_id, 1, x as f64 + 0.5, y as f64 + 0.25, z as f64 + 0.5, 10);
         }
     }
+    // Clean up a broken sign's stored text.
+    if cubeplane_world::block::info(previous).name.ends_with("_sign") {
+        shared.remove_sign((x, y, z));
+    }
     // Fluids can now flow into the gap; refresh redstone if it was a component.
     shared.schedule_fluid(x, y, z);
     if crate::sim::is_redstone(cubeplane_world::block::name_of(previous)) {
@@ -1018,6 +1101,10 @@ fn place_block(shared: &Arc<Shared>, player: &Player, x: i32, y: i32, z: i32, fa
     // Placing a chest creates its (empty) container block entity.
     if cubeplane_world::block::info(state).name == "chest" {
         shared.ensure_container((px, py, pz));
+    }
+    // Placing a sign opens its edit screen.
+    if cubeplane_world::block::info(state).name.ends_with("_sign") {
+        player.send(cb::open_sign_editor(px, py, pz));
     }
     // Let fluids flow toward / from the change, and update redstone.
     shared.schedule_fluid(px, py, pz);

@@ -40,6 +40,8 @@ pub struct Shared {
     pub(crate) vehicles: RwLock<HashMap<i32, Vehicle>>,
     /// Block-entity contents for chests, keyed by block position.
     containers: RwLock<HashMap<(i32, i32, i32), Vec<ItemStack>>>,
+    /// Sign text (4 lines) keyed by block position.
+    signs: RwLock<HashMap<(i32, i32, i32), [String; 4]>>,
     /// Cells queued for fluid-flow evaluation.
     fluid_queue: Mutex<std::collections::VecDeque<(i32, i32, i32)>>,
     next_entity_id: AtomicI32,
@@ -73,6 +75,7 @@ impl Shared {
             projectiles: RwLock::new(HashMap::new()),
             vehicles: RwLock::new(HashMap::new()),
             containers: RwLock::new(HashMap::new()),
+            signs: RwLock::new(HashMap::new()),
             fluid_queue: Mutex::new(std::collections::VecDeque::new()),
             next_entity_id: AtomicI32::new(1),
             total_joins: AtomicU64::new(0),
@@ -195,6 +198,31 @@ impl Shared {
         let mut q = self.fluid_queue.lock().unwrap();
         let n = max.min(q.len());
         q.drain(..n).collect()
+    }
+
+    /// Store the text on a sign.
+    pub fn set_sign(&self, pos: (i32, i32, i32), lines: [String; 4]) {
+        self.signs.write().unwrap().insert(pos, lines);
+    }
+
+    /// Read a sign's text.
+    pub fn sign(&self, pos: (i32, i32, i32)) -> Option<[String; 4]> {
+        self.signs.read().unwrap().get(&pos).cloned()
+    }
+
+    /// Remove a sign's text (when broken).
+    pub fn remove_sign(&self, pos: (i32, i32, i32)) {
+        self.signs.write().unwrap().remove(&pos);
+    }
+
+    /// All signs, for persistence.
+    pub fn signs_snapshot(&self) -> HashMap<(i32, i32, i32), [String; 4]> {
+        self.signs.read().unwrap().clone()
+    }
+
+    /// Replace all signs (loading from disk).
+    pub fn load_signs(&self, data: HashMap<(i32, i32, i32), [String; 4]>) {
+        *self.signs.write().unwrap() = data;
     }
 
     /// Create an empty container at `pos` if none exists.

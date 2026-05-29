@@ -104,6 +104,33 @@ impl Inventory {
         count
     }
 
+    /// Whether the inventory holds at least `count` of item `id`.
+    pub fn has(&self, id: i32, count: u8) -> bool {
+        let total: u32 = self.slots.iter().filter(|s| s.id == id).map(|s| s.count as u32).sum();
+        total >= count as u32
+    }
+
+    /// Remove up to `count` of item `id`; returns true if all were removed.
+    pub fn remove(&mut self, id: i32, mut count: u8) -> bool {
+        if !self.has(id, count) {
+            return false;
+        }
+        for slot in self.slots.iter_mut() {
+            if count == 0 {
+                break;
+            }
+            if slot.id == id {
+                let take = slot.count.min(count);
+                slot.count -= take;
+                count -= take;
+                if slot.count == 0 {
+                    *slot = ItemStack::EMPTY;
+                }
+            }
+        }
+        count == 0
+    }
+
     /// Total defense points from worn armor.
     pub fn armor_defense(&self) -> f32 {
         (ARMOR_START..ARMOR_START + 4)
@@ -128,6 +155,18 @@ mod tests {
         // 128 stone across two slots.
         let total: u32 = inv.slots().iter().filter(|s| s.id == stone).map(|s| s.count as u32).sum();
         assert_eq!(total, 128);
+    }
+
+    #[test]
+    fn has_and_remove_for_trading() {
+        let mut inv = Inventory::default();
+        let emerald = item::by_name("apple").unwrap(); // any id
+        inv.add(emerald, 5);
+        assert!(inv.has(emerald, 5));
+        assert!(!inv.has(emerald, 6));
+        assert!(inv.remove(emerald, 3));
+        assert!(inv.has(emerald, 2));
+        assert!(!inv.remove(emerald, 5)); // not enough left
     }
 
     #[test]
