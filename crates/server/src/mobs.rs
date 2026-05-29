@@ -109,24 +109,24 @@ fn drop_loot(shared: &Arc<Shared>, kind: MobKind, x: f64, y: f64, z: f64) {
             }
         }
     };
-    match kind {
-        MobKind::Zombie => drop("rotten_flesh", 0, 2),
-        MobKind::Skeleton => {
+    match kind.name() {
+        "zombie" | "husk" => drop("rotten_flesh", 0, 2),
+        "skeleton" | "stray" => {
             drop("bone", 0, 2);
             drop("arrow", 0, 2);
         }
-        MobKind::Spider => {
+        "spider" | "cave_spider" => {
             drop("string", 0, 2);
             drop("spider_eye", 0, 1);
         }
-        MobKind::Creeper => drop("gunpowder", 0, 2),
-        MobKind::Pig => drop("porkchop", 1, 3),
-        MobKind::Sheep => drop("mutton", 1, 2),
-        MobKind::Chicken => {
+        "creeper" => drop("gunpowder", 0, 2),
+        "pig" => drop("porkchop", 1, 3),
+        "sheep" => drop("mutton", 1, 2),
+        "chicken" => {
             drop("feather", 0, 2);
             drop("egg", 0, 1);
         }
-        MobKind::Cow => {}
+        _ => {}
     }
 }
 
@@ -241,48 +241,48 @@ fn step_mob(shared: &Arc<Shared>, players: &[Player], mob: &mut Mob, tick: u64) 
         let dz = s.z - mob.z;
         let dist2 = dx * dx + dz * dz;
 
-        match mob.kind {
+        let name = mob.kind.name();
+        if name == "creeper" && *dist < 3.0 {
             // Creepers detonate on contact.
-            MobKind::Creeper if *dist < 3.0 => {
-                explode(shared, mob.x, mob.y, mob.z, 3.0);
-                mob.health = 0.0; // removed (with loot) next tick
-                return;
-            }
+            explode(shared, mob.x, mob.y, mob.z, 3.0);
+            mob.health = 0.0; // removed (with loot) next tick
+            return;
+        } else if matches!(name, "skeleton" | "stray")
+            && *dist < 14.0
+            && mob.attack_cooldown == 0
+            && !s.dead
+        {
             // Skeletons fire arrows from range.
-            MobKind::Skeleton if *dist < 14.0 && mob.attack_cooldown == 0 && !s.dead => {
-                drops::spawn_arrow(
-                    shared,
-                    mob.entity_id,
-                    mob.x,
-                    mob.y + 1.2,
-                    mob.z,
-                    dx,
-                    (s.y + 1.0) - (mob.y + 1.2),
-                    dz,
-                    2.0,
-                );
-                mob.attack_cooldown = 40;
-            }
-            // Zombies and spiders melee.
-            _ if mob.kind.attack_damage() > 0.0
-                && dist2 < 2.25
-                && (s.y - mob.y).abs() < 2.0
-                && mob.attack_cooldown == 0
-                && !s.dead =>
-            {
-                combat::damage_player(
-                    shared,
-                    p,
-                    mob.kind.attack_damage(),
-                    &format!("was slain by a {}", mob.kind.name()),
-                );
-                mob.attack_cooldown = 20;
-                let len = dist2.sqrt().max(1e-6);
-                let vx = (dx / len * 0.45 * VEL_UNIT) as i16;
-                let vz = (dz / len * 0.45 * VEL_UNIT) as i16;
-                p.send(cb::entity_velocity(p.entity_id, vx, 3500, vz));
-            }
-            _ => {}
+            drops::spawn_arrow(
+                shared,
+                mob.entity_id,
+                mob.x,
+                mob.y + 1.2,
+                mob.z,
+                dx,
+                (s.y + 1.0) - (mob.y + 1.2),
+                dz,
+                2.0,
+            );
+            mob.attack_cooldown = 40;
+        } else if mob.kind.attack_damage() > 0.0
+            && dist2 < 2.25
+            && (s.y - mob.y).abs() < 2.0
+            && mob.attack_cooldown == 0
+            && !s.dead
+        {
+            // Melee mobs (zombies, spiders, …).
+            combat::damage_player(
+                shared,
+                p,
+                mob.kind.attack_damage(),
+                &format!("was slain by a {}", mob.kind.name()),
+            );
+            mob.attack_cooldown = 20;
+            let len = dist2.sqrt().max(1e-6);
+            let vx = (dx / len * 0.45 * VEL_UNIT) as i16;
+            let vz = (dz / len * 0.45 * VEL_UNIT) as i16;
+            p.send(cb::entity_velocity(p.entity_id, vx, 3500, vz));
         }
     }
 
@@ -329,12 +329,8 @@ fn try_spawn(shared: &Arc<Shared>, players: &[Player], is_night: bool) {
         return;
     };
 
-    // Pick a kind, re-rolling hostiles into passives when not allowed.
-    let mut kind = MobKind::ALL[rng.gen_range(0..MobKind::ALL.len())];
-    if kind.hostile() && !allow_hostiles {
-        let passives: Vec<MobKind> = MobKind::ALL.into_iter().filter(|k| !k.hostile()).collect();
-        kind = passives[rng.gen_range(0..passives.len())];
-    }
+    // Pick a kind; restrict to passive animals when hostiles aren't allowed.
+    let kind = MobKind::random(&mut rng, !allow_hostiles);
     let entity_id = shared.next_entity_id();
     let heading = rng.gen::<f32>() * std::f32::consts::TAU;
     let mob = Mob::new(entity_id, kind, sx, y as f64, sz, heading);

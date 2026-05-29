@@ -12,107 +12,63 @@ pub const ITEM_ENTITY: i32 = 54;
 /// Entity type id for an arrow.
 pub const ARROW: i32 = 3;
 
-/// A kind of mob with its registry id and gameplay stats.
+/// A handle to one of the game's living mob types (index into the generated
+/// [`crate::mobs_table::MOBS`] table). All ~80 living entities are available.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MobKind {
-    Zombie,
-    Skeleton,
-    Spider,
-    Creeper,
-    Pig,
-    Cow,
-    Sheep,
-    Chicken,
-}
+pub struct MobKind(usize);
 
 impl MobKind {
-    /// All kinds, used by the spawner.
-    pub const ALL: [MobKind; 8] = [
-        MobKind::Zombie,
-        MobKind::Skeleton,
-        MobKind::Spider,
-        MobKind::Creeper,
-        MobKind::Pig,
-        MobKind::Cow,
-        MobKind::Sheep,
-        MobKind::Chicken,
-    ];
+    fn row(self) -> &'static crate::mobs_table::MobRow {
+        &crate::mobs_table::MOBS[self.0]
+    }
 
     /// The 1.20.1 entity type registry id.
     pub fn type_id(self) -> i32 {
-        match self {
-            MobKind::Zombie => 118,
-            MobKind::Skeleton => 86,
-            MobKind::Spider => 95,
-            MobKind::Creeper => 19,
-            MobKind::Pig => 72,
-            MobKind::Cow => 18,
-            MobKind::Sheep => 82,
-            MobKind::Chicken => 15,
-        }
+        self.row().type_id
     }
 
     /// Lowercase identifier (without the `minecraft:` prefix).
     pub fn name(self) -> &'static str {
-        match self {
-            MobKind::Zombie => "zombie",
-            MobKind::Skeleton => "skeleton",
-            MobKind::Spider => "spider",
-            MobKind::Creeper => "creeper",
-            MobKind::Pig => "pig",
-            MobKind::Cow => "cow",
-            MobKind::Sheep => "sheep",
-            MobKind::Chicken => "chicken",
-        }
+        self.row().name
     }
 
     /// Maximum (and spawn) health in half-heart units.
     pub fn max_health(self) -> f32 {
-        match self {
-            MobKind::Zombie => 20.0,
-            MobKind::Skeleton => 20.0,
-            MobKind::Spider => 16.0,
-            MobKind::Creeper => 20.0,
-            MobKind::Pig => 10.0,
-            MobKind::Cow => 10.0,
-            MobKind::Sheep => 8.0,
-            MobKind::Chicken => 4.0,
-        }
+        self.row().max_health
     }
 
     /// Whether this mob hunts and attacks players.
     pub fn hostile(self) -> bool {
-        matches!(
-            self,
-            MobKind::Zombie | MobKind::Skeleton | MobKind::Spider | MobKind::Creeper
-        )
+        self.row().hostile
     }
 
     /// Horizontal movement speed in blocks per tick.
     pub fn speed(self) -> f64 {
-        match self {
-            MobKind::Spider => 0.22,
-            MobKind::Skeleton | MobKind::Zombie => 0.16,
-            MobKind::Creeper => 0.14,
-            MobKind::Chicken => 0.12,
-            _ => 0.13,
-        }
+        self.row().speed
     }
 
     /// Melee damage dealt to a player (half-hearts).
     pub fn attack_damage(self) -> f32 {
-        match self {
-            MobKind::Zombie => 3.0,
-            MobKind::Spider => 2.0,
-            MobKind::Skeleton => 2.0,
-            MobKind::Creeper => 6.0,
-            _ => 0.0,
-        }
+        self.row().attack
     }
 
     /// Parse a kind from its lowercase name.
     pub fn from_name(name: &str) -> Option<MobKind> {
-        MobKind::ALL.into_iter().find(|k| k.name() == name)
+        let key = name.strip_prefix("minecraft:").unwrap_or(name);
+        crate::mobs_table::MOBS
+            .iter()
+            .position(|m| m.name == key)
+            .map(MobKind)
+    }
+
+    /// A random mob kind, optionally restricted to passive animals.
+    pub fn random(rng: &mut impl rand::Rng, passive_only: bool) -> MobKind {
+        loop {
+            let i = rng.gen_range(0..crate::mobs_table::MOBS.len());
+            if !passive_only || !crate::mobs_table::MOBS[i].hostile {
+                return MobKind(i);
+            }
+        }
     }
 }
 
@@ -201,25 +157,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn kinds_have_distinct_type_ids() {
-        let mut ids: Vec<i32> = MobKind::ALL.iter().map(|k| k.type_id()).collect();
-        ids.sort();
-        ids.dedup();
-        assert_eq!(ids.len(), MobKind::ALL.len());
-    }
-
-    #[test]
     fn hostility_and_lookup() {
-        assert!(MobKind::Zombie.hostile());
-        assert!(!MobKind::Cow.hostile());
-        assert_eq!(MobKind::from_name("creeper"), Some(MobKind::Creeper));
-        assert_eq!(MobKind::from_name("dragon"), None);
+        assert!(MobKind::from_name("zombie").unwrap().hostile());
+        assert!(!MobKind::from_name("cow").unwrap().hostile());
+        assert!(MobKind::from_name("creeper").is_some());
+        assert_eq!(MobKind::from_name("not_a_mob"), None);
     }
 
     #[test]
     fn mob_starts_alive_at_full_health() {
-        let m = Mob::new(7, MobKind::Pig, 0.0, 64.0, 0.0, 0.0);
+        let pig = MobKind::from_name("pig").unwrap();
+        let m = Mob::new(7, pig, 0.0, 64.0, 0.0, 0.0);
         assert!(m.alive());
-        assert_eq!(m.health, MobKind::Pig.max_health());
+        assert_eq!(m.health, pig.max_health());
     }
 }

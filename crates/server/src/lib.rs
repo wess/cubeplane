@@ -20,6 +20,7 @@ mod inventory;
 mod item;
 mod items_table;
 mod mobs;
+mod mobs_table;
 mod mod_actions;
 mod persistence;
 mod player;
