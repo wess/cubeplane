@@ -72,7 +72,7 @@ fn rewrite_clientbound_body(canonical_id: i32, protocol: i32, body: &[u8]) -> Op
         }
         // 1.19 and 1.19.2 have byte-identical packet bodies (only ids differ).
         PROTO_1_19_2 | PROTO_1_19 => rewrite_clientbound_body_1192(canonical_id, body),
-        PROTO_1_18_2 => rewrite_clientbound_body_758(canonical_id, body),
+        PROTO_1_18_2 | PROTO_1_18 => rewrite_clientbound_body_758(canonical_id, body),
         _ => None,
     }
 }
@@ -402,7 +402,7 @@ fn remap_play_serverbound(wire_id: i32, protocol: i32) -> i32 {
         PROTO_1_20_3 => apply_map(wire_id, SB_765_TO_763),
         PROTO_1_19_3 => apply_map(wire_id, SB_761_TO_763),
         PROTO_1_19 => apply_map(wire_id, SB_759_TO_763),
-        PROTO_1_18_2 => apply_map(wire_id, SB_758_TO_763),
+        PROTO_1_18_2 | PROTO_1_18 => apply_map(wire_id, SB_758_TO_763),
         _ => wire_id,
     }
 }
@@ -420,10 +420,10 @@ fn remap_play_clientbound(canonical_id: i32, protocol: i32) -> i32 {
         // 1.19/1.19.1 likewise folds player_remove into player_info (0x34).
         PROTO_1_19 if canonical_id == 0x39 => 0x34,
         PROTO_1_19 => apply_map(canonical_id, CB_763_TO_759),
-        // 1.18.2: player_remove → player_info (0x36); system_chat → chat (0x0f).
-        PROTO_1_18_2 if canonical_id == 0x39 => 0x36,
-        PROTO_1_18_2 if canonical_id == 0x64 => 0x0f,
-        PROTO_1_18_2 => apply_map(canonical_id, CB_763_TO_758),
+        // 1.18.x: player_remove → player_info (0x36); system_chat → chat (0x0f).
+        PROTO_1_18_2 | PROTO_1_18 if canonical_id == 0x39 => 0x36,
+        PROTO_1_18_2 | PROTO_1_18 if canonical_id == 0x64 => 0x0f,
+        PROTO_1_18_2 | PROTO_1_18 => apply_map(canonical_id, CB_763_TO_758),
         // 1.19.4 play ids are identical to 763.
         _ => canonical_id,
     }
@@ -441,6 +441,8 @@ const PROTO_1_19_2: i32 = 760;
 const PROTO_1_19: i32 = 759;
 /// Protocol number for Minecraft 1.18.2.
 const PROTO_1_18_2: i32 = 758;
+/// Protocol number for Minecraft 1.18 / 1.18.1 (identical play wire format to 1.18.2).
+const PROTO_1_18: i32 = 757;
 /// Protocol number for Minecraft 1.20.3 / 1.20.4.
 const PROTO_1_20_3: i32 = 765;
 
