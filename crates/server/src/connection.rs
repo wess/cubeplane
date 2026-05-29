@@ -53,7 +53,7 @@ async fn drive(stream: TcpStream, shared: Arc<Shared>) -> Result<()> {
     let next_state = raw.body.read_varint()?;
 
     match next_state {
-        1 => status(&mut rh, &mut wh, &shared).await,
+        1 => status(&mut rh, &mut wh, &shared, protocol).await,
         2 => login(rh, wh, shared, protocol).await,
         other => {
             debug!("unknown next-state {other} in handshake");
@@ -66,7 +66,7 @@ async fn drive(stream: TcpStream, shared: Arc<Shared>) -> Result<()> {
 // Status (server list ping)
 // ---------------------------------------------------------------------------
 
-async fn status<R, W>(reader: &mut R, writer: &mut W, shared: &Arc<Shared>) -> Result<()>
+async fn status<R, W>(reader: &mut R, writer: &mut W, shared: &Arc<Shared>, protocol: i32) -> Result<()>
 where
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin,
@@ -79,7 +79,7 @@ where
         let mut raw = RawPacket::parse(frame)?;
         match raw.id {
             status_sb::REQUEST => {
-                let payload = cb::status_response(&status_json(shared));
+                let payload = cb::status_response(&status_json(shared, protocol));
                 write_frame(writer, &payload, NO_COMPRESSION).await?;
             }
             status_sb::PING => {
@@ -93,9 +93,16 @@ where
     }
 }
 
-fn status_json(shared: &Arc<Shared>) -> String {
+fn status_json(shared: &Arc<Shared>, client_protocol: i32) -> String {
+    // Report our protocol to a client we can host (so it shows as compatible),
+    // and our own protocol to others (so they honestly see a version mismatch).
+    let advertised = if cubeplane_protocol::is_supported(client_protocol) {
+        client_protocol
+    } else {
+        PROTOCOL_VERSION
+    };
     json!({
-        "version": { "name": cubeplane_protocol::GAME_VERSION, "protocol": PROTOCOL_VERSION },
+        "version": { "name": cubeplane_protocol::GAME_VERSION, "protocol": advertised },
         "players": {
             "max": shared.config.server.max_players,
             "online": shared.player_count(),
@@ -118,14 +125,19 @@ async fn login(mut rh: OwnedReadHalf, mut wh: OwnedWriteHalf, shared: Arc<Shared
     }
     let name = raw.body.read_string()?;
 
-    // Version gate: cubeplane speaks exactly protocol 763 (Minecraft 1.20.1).
-    if protocol != PROTOCOL_VERSION {
+    // Version gate: cubeplane hosts the play state for protocol 763 (1.20.1).
+    // Other clients get a clear, version-named message instead of a raw error.
+    if !cubeplane_protocol::is_supported(protocol) {
+        let yours = cubeplane_protocol::version_name(protocol)
+            .map(|n| format!("Minecraft {n} (protocol {protocol})"))
+            .unwrap_or_else(|| format!("protocol {protocol}"));
         let reason = text::colored(
             format!(
-                "cubeplane requires Minecraft {} (protocol {}); you connected with protocol {}.",
+                "cubeplane runs Minecraft {} (protocol {}). You connected with {}. Please switch your client to {}.",
                 cubeplane_protocol::GAME_VERSION,
                 PROTOCOL_VERSION,
-                protocol
+                yours,
+                cubeplane_protocol::GAME_VERSION,
             ),
             "red",
         );
