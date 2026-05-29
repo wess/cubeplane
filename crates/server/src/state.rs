@@ -29,6 +29,8 @@ pub struct Shared {
     pub(crate) projectiles: RwLock<HashMap<i32, Projectile>>,
     /// Block-entity contents for chests, keyed by block position.
     containers: RwLock<HashMap<(i32, i32, i32), Vec<ItemStack>>>,
+    /// Cells queued for fluid-flow evaluation.
+    fluid_queue: Mutex<std::collections::VecDeque<(i32, i32, i32)>>,
     next_entity_id: AtomicI32,
     total_joins: AtomicU64,
     /// World time of day in ticks (0..24000), advanced by the game loop.
@@ -54,6 +56,7 @@ impl Shared {
             items: RwLock::new(HashMap::new()),
             projectiles: RwLock::new(HashMap::new()),
             containers: RwLock::new(HashMap::new()),
+            fluid_queue: Mutex::new(std::collections::VecDeque::new()),
             next_entity_id: AtomicI32::new(1),
             total_joins: AtomicU64::new(0),
             world_time: std::sync::atomic::AtomicI64::new(1000),
@@ -122,6 +125,32 @@ impl Shared {
     /// Register a projectile.
     pub fn add_projectile(&self, proj: Projectile) {
         self.projectiles.write().unwrap().insert(proj.entity_id, proj);
+    }
+
+    /// Queue a cell (and its 6 neighbours) for fluid-flow evaluation.
+    pub fn schedule_fluid(&self, x: i32, y: i32, z: i32) {
+        let mut q = self.fluid_queue.lock().unwrap();
+        if q.len() > 100_000 {
+            return; // safety cap
+        }
+        for c in [
+            (x, y, z),
+            (x + 1, y, z),
+            (x - 1, y, z),
+            (x, y + 1, z),
+            (x, y - 1, z),
+            (x, y, z + 1),
+            (x, y, z - 1),
+        ] {
+            q.push_back(c);
+        }
+    }
+
+    /// Drain up to `max` queued fluid cells.
+    pub fn drain_fluid(&self, max: usize) -> Vec<(i32, i32, i32)> {
+        let mut q = self.fluid_queue.lock().unwrap();
+        let n = max.min(q.len());
+        q.drain(..n).collect()
     }
 
     /// Create an empty container at `pos` if none exists.

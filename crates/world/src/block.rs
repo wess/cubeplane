@@ -120,26 +120,59 @@ pub fn emission(state: StateId) -> u8 {
     info(state).emission
 }
 
+/// Decompose a state into its block info, per-property strides, and the
+/// current value index of each property.
+fn decompose(state: StateId) -> (&'static BlockInfo, Vec<u32>, Vec<u32>) {
+    let bi = info(state);
+    let n = bi.props.len();
+    let mut stride = vec![1u32; n];
+    for i in (0..n.saturating_sub(1)).rev() {
+        stride[i] = stride[i + 1] * bi.props[i + 1].values as u32;
+    }
+    let base = bi.min.min(state);
+    let offset = (state - base) as u32;
+    let idx = (0..n)
+        .map(|i| (offset / stride[i]) % bi.props[i].values as u32)
+        .collect();
+    (bi, stride, idx)
+}
+
+/// The current value index of a named property on a state, if it has one.
+pub fn prop_index(state: StateId, name: &str) -> Option<u32> {
+    let (bi, _, idx) = decompose(state);
+    bi.props.iter().position(|p| p.name == name).map(|i| idx[i])
+}
+
+/// The number of values a named property has on a state.
+pub fn prop_values(state: StateId, name: &str) -> Option<u16> {
+    info(state).props.iter().find(|p| p.name == name).map(|p| p.values)
+}
+
+/// Return the state with a named property set to `value` (clamped). If the
+/// block lacks that property the state is returned unchanged.
+pub fn with_prop(state: StateId, name: &str, value: u32) -> StateId {
+    let (bi, stride, mut idx) = decompose(state);
+    if let Some(i) = bi.props.iter().position(|p| p.name == name) {
+        idx[i] = value.min(bi.props[i].values as u32 - 1);
+    }
+    (bi.min as u32 + idx.iter().zip(stride.iter()).map(|(a, b)| a * b).sum::<u32>()) as StateId
+}
+
+/// Block name for a state (full registry).
+pub fn name_of(state: StateId) -> &'static str {
+    info(state).name
+}
+
 /// Orient a block's default state for placement, using the clicked `face`
 /// (0=-Y,1=+Y,2=-Z,3=+Z,4=-X,5=+X) and the player `yaw` (degrees). Handles the
 /// common `axis`, horizontal/all `facing`, and stair `half`/slab `type`
 /// properties generically from the block-state property table; other
 /// properties keep their default value.
 pub fn place_state(default: StateId, face: i32, yaw: f32) -> StateId {
-    let bi = info(default);
+    let (bi, stride, mut idx) = decompose(default);
     if bi.props.is_empty() {
         return default;
     }
-    let n = bi.props.len();
-    // Strides: the last property varies fastest.
-    let mut stride = vec![1u32; n];
-    for i in (0..n.saturating_sub(1)).rev() {
-        stride[i] = stride[i + 1] * bi.props[i + 1].values as u32;
-    }
-    let offset = (default - bi.min) as u32;
-    let mut idx: Vec<u32> = (0..n)
-        .map(|i| (offset / stride[i]) % bi.props[i].values as u32)
-        .collect();
 
     for (slot, p) in idx.iter_mut().zip(bi.props.iter()) {
         match (p.name, p.values) {

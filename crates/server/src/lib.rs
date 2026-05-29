@@ -26,6 +26,7 @@ mod persistence;
 mod player;
 mod registry;
 mod serverbound;
+mod sim;
 mod state;
 mod text;
 
@@ -180,6 +181,16 @@ async fn game_loop(shared: Arc<Shared>) {
         // Natural health regeneration every four seconds.
         if ticks.is_multiple_of(80) {
             combat::regenerate(&shared);
+        }
+
+        // Fluid flow drains its queue frequently (cheap when idle).
+        if ticks.is_multiple_of(5) {
+            sim::fluid_tick(&shared);
+        }
+        // Random-tick growth and fire every ~2 seconds.
+        if ticks.is_multiple_of(40) {
+            sim::random_tick(&shared);
+            sim::fire_tick(&shared);
         }
 
         // Hunger drain every 30 seconds.

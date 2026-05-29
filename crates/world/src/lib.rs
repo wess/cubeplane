@@ -97,6 +97,11 @@ impl World {
         self.chunks.contains_key(&(cx, cz))
     }
 
+    /// Coordinates of all currently-loaded chunks (for simulation passes).
+    pub fn loaded_coords(&self) -> Vec<(i32, i32)> {
+        self.chunks.keys().copied().collect()
+    }
+
     /// Drop every loaded chunk not in `keep` from memory, returning the number
     /// unloaded. Edits persist in the edit map, so unloaded chunks regenerate
     /// identically on demand.

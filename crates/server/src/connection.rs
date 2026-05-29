@@ -434,8 +434,8 @@ async fn play_loop<R: AsyncRead + Unpin>(
                 player.send(cb::acknowledge_block_change(sequence));
             }
             Play::BlockPlace { x, y, z, face, sequence } => {
-                // Right-clicking a chest opens it; otherwise place the held block.
-                if !try_open_container(shared, player, x, y, z) {
+                // Interacting with a lever/chest takes priority over placing.
+                if !try_toggle_lever(shared, x, y, z) && !try_open_container(shared, player, x, y, z) {
                     place_block(shared, player, x, y, z, face);
                 }
                 player.send(cb::acknowledge_block_change(sequence));
@@ -644,6 +644,24 @@ fn respawn_player(
     broadcast_move(shared, player);
 }
 
+/// Toggle a lever the player clicked, updating redstone. Returns true if a
+/// lever was toggled.
+fn try_toggle_lever(shared: &Arc<Shared>, x: i32, y: i32, z: i32) -> bool {
+    let state = { shared.world.lock().unwrap().get_block(x, y, z) };
+    if cubeplane_world::block::name_of(state) != "lever" {
+        return false;
+    }
+    let powered = cubeplane_world::block::prop_index(state, "powered").unwrap_or(1);
+    let toggled = cubeplane_world::block::with_prop(state, "powered", if powered == 0 { 1 } else { 0 });
+    {
+        let mut w = shared.world.lock().unwrap();
+        w.set_block(x, y, z, toggled);
+    }
+    shared.broadcast(cb::block_update(x, y, z, toggled));
+    crate::sim::redstone_update(shared, x, y, z);
+    true
+}
+
 /// Open a chest the player clicked. Returns true if a container was opened.
 fn try_open_container(shared: &Arc<Shared>, player: &Player, x: i32, y: i32, z: i32) -> bool {
     let is_chest = {
@@ -723,6 +741,11 @@ fn break_block(shared: &Arc<Shared>, player: &Player, x: i32, y: i32, z: i32, cr
             drops::spawn_item(shared, item_id, 1, x as f64 + 0.5, y as f64 + 0.25, z as f64 + 0.5, 10);
         }
     }
+    // Fluids can now flow into the gap; refresh redstone if it was a component.
+    shared.schedule_fluid(x, y, z);
+    if crate::sim::is_redstone(cubeplane_world::block::name_of(previous)) {
+        crate::sim::redstone_update(shared, x, y, z);
+    }
     shared.fire_mod(ModEvent::BlockBreak {
         player: player.name.clone(),
         x,
@@ -760,6 +783,11 @@ fn place_block(shared: &Arc<Shared>, player: &Player, x: i32, y: i32, z: i32, fa
     // Placing a chest creates its (empty) container block entity.
     if cubeplane_world::block::info(state).name == "chest" {
         shared.ensure_container((px, py, pz));
+    }
+    // Let fluids flow toward / from the change, and update redstone.
+    shared.schedule_fluid(px, py, pz);
+    if crate::sim::is_redstone(cubeplane_world::block::name_of(state)) {
+        crate::sim::redstone_update(shared, px, py, pz);
     }
 
     // Survival consumes the placed item.
