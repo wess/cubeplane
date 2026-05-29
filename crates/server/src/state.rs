@@ -37,6 +37,15 @@ pub struct Furnace {
     pub burn_total: u32,
 }
 
+/// A brewing-stand block entity: three bottle slots + an ingredient + timer.
+#[derive(Clone, Default)]
+pub struct Brewing {
+    pub bottles: [ItemStack; 3],
+    pub ingredient: ItemStack,
+    /// Brew progress in ticks (0..400).
+    pub brew_time: u32,
+}
+
 /// The personality and running conversation of an AI villager.
 pub struct VillagerBrain {
     pub profession: &'static str,
@@ -64,6 +73,8 @@ pub struct Shared {
     signs: RwLock<HashMap<(i32, i32, i32), [String; 4]>>,
     /// Furnace block entities keyed by block position.
     pub(crate) furnaces: RwLock<HashMap<(i32, i32, i32), Furnace>>,
+    /// Brewing-stand block entities keyed by block position.
+    pub(crate) brewing: RwLock<HashMap<(i32, i32, i32), Brewing>>,
     /// Cells queued for fluid-flow evaluation.
     fluid_queue: Mutex<std::collections::VecDeque<(i32, i32, i32)>>,
     /// Primed TNT: `(entity id, x, y, z, fuse ticks)`.
@@ -107,6 +118,7 @@ impl Shared {
             containers: RwLock::new(HashMap::new()),
             signs: RwLock::new(HashMap::new()),
             furnaces: RwLock::new(HashMap::new()),
+            brewing: RwLock::new(HashMap::new()),
             fluid_queue: Mutex::new(std::collections::VecDeque::new()),
             primed_tnt: Mutex::new(Vec::new()),
             next_entity_id: AtomicI32::new(1),
@@ -282,6 +294,26 @@ impl Shared {
     /// Positions of all furnaces (for the smelting tick).
     pub fn furnace_positions(&self) -> Vec<(i32, i32, i32)> {
         self.furnaces.read().unwrap().keys().copied().collect()
+    }
+
+    /// Ensure a brewing stand exists at `pos`.
+    pub fn ensure_brewing(&self, pos: (i32, i32, i32)) {
+        self.brewing.write().unwrap().entry(pos).or_default();
+    }
+
+    /// Mutate a brewing stand.
+    pub fn with_brewing<R>(&self, pos: (i32, i32, i32), f: impl FnOnce(&mut Brewing) -> R) -> Option<R> {
+        self.brewing.write().unwrap().get_mut(&pos).map(f)
+    }
+
+    /// Remove a brewing stand, returning its contents.
+    pub fn remove_brewing(&self, pos: (i32, i32, i32)) -> Option<Brewing> {
+        self.brewing.write().unwrap().remove(&pos)
+    }
+
+    /// Positions of all brewing stands (for the brewing tick).
+    pub fn brewing_positions(&self) -> Vec<(i32, i32, i32)> {
+        self.brewing.read().unwrap().keys().copied().collect()
     }
 
     /// Store the text on a sign.

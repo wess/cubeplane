@@ -42,20 +42,35 @@ pub struct ItemStack {
     pub ench: u8,
     /// The level of that enchantment.
     pub ench_lvl: u8,
+    /// Potion type (1-based into [`POTIONS`]; 0 = none, for `potion` items).
+    pub potion: u8,
 }
 
 /// The enchantments cubeplane models (one per item). Index+1 is stored on the
 /// stack; the wire form uses `minecraft:<name>`.
 pub const ENCHANTS: &[&str] = &["sharpness", "protection", "unbreaking", "efficiency", "power", "fire_aspect"];
 
+/// Potion types cubeplane models. Index+1 is stored on the stack.
+pub const POTIONS: &[&str] =
+    &["water", "healing", "regeneration", "swiftness", "strength", "poison", "fire_resistance", "night_vision", "harming"];
+
 impl ItemStack {
-    pub const EMPTY: ItemStack = ItemStack { id: 0, count: 0, damage: 0, ench: 0, ench_lvl: 0 };
+    pub const EMPTY: ItemStack = ItemStack { id: 0, count: 0, damage: 0, ench: 0, ench_lvl: 0, potion: 0 };
 
     pub fn new(id: i32, count: u8) -> Self {
         if id == 0 || count == 0 {
             ItemStack::EMPTY
         } else {
-            ItemStack { id, count, damage: 0, ench: 0, ench_lvl: 0 }
+            ItemStack { id, count, damage: 0, ench: 0, ench_lvl: 0, potion: 0 }
+        }
+    }
+
+    /// The potion type name on this stack, if any.
+    pub fn potion_name(&self) -> Option<&'static str> {
+        if self.potion == 0 {
+            None
+        } else {
+            POTIONS.get(self.potion as usize - 1).copied()
         }
     }
 
@@ -106,6 +121,44 @@ pub fn max_durability(id: i32) -> Option<u16> {
 pub fn enchant_index(name: &str) -> Option<u8> {
     let key = name.strip_prefix("minecraft:").unwrap_or(name);
     ENCHANTS.iter().position(|n| *n == key).map(|i| i as u8 + 1)
+}
+
+/// The 1-based potion index for a potion name.
+pub fn potion_index(name: &str) -> Option<u8> {
+    let key = name.strip_prefix("minecraft:").unwrap_or(name);
+    POTIONS.iter().position(|n| *n == key).map(|i| i as u8 + 1)
+}
+
+/// The status effect a potion confers: `(effect id, amplifier, seconds)`.
+pub fn potion_effect(potion: &str) -> Option<(i32, i8, i32)> {
+    Some(match potion {
+        "healing" => (6, 0, 0),        // instant health
+        "harming" => (7, 0, 0),        // instant damage
+        "regeneration" => (10, 0, 45),
+        "swiftness" => (1, 0, 180),    // speed
+        "strength" => (5, 0, 180),
+        "poison" => (19, 0, 45),
+        "fire_resistance" => (12, 0, 180),
+        "night_vision" => (16, 0, 180),
+        _ => return None, // water
+    })
+}
+
+/// Which potion an ingredient brews (skipping the awkward-base step).
+pub fn brew_result(ingredient: i32) -> Option<u8> {
+    let name = name_of(ingredient)?;
+    let potion = match name {
+        "glistering_melon_slice" => "healing",
+        "sugar" => "swiftness",
+        "blaze_powder" => "strength",
+        "spider_eye" => "poison",
+        "magma_cream" => "fire_resistance",
+        "golden_carrot" => "night_vision",
+        "ghast_tear" => "regeneration",
+        "fermented_spider_eye" => "harming",
+        _ => return None,
+    };
+    potion_index(potion)
 }
 
 fn is_tool_name(n: &str) -> bool {
@@ -258,6 +311,15 @@ mod tests {
         assert!(ItemStack::new(0, 5).is_empty());
         assert!(ItemStack::new(5, 0).is_empty());
         assert!(!ItemStack::new(1, 1).is_empty());
+    }
+
+    #[test]
+    fn potions_and_brewing() {
+        assert_eq!(potion_effect("strength").map(|e| e.0), Some(5));
+        assert_eq!(potion_effect("water"), None);
+        // sugar brews into the swiftness potion.
+        let p = brew_result(id_any("sugar").unwrap()).unwrap();
+        assert_eq!(POTIONS[p as usize - 1], "swiftness");
     }
 
     #[test]

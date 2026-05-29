@@ -41,6 +41,11 @@ fn read_slot<B: Buf>(b: &mut B) -> Result<ItemStack> {
                     }
                 }
             }
+            if let Some(cubeplane_nbt::Value::String(p)) = m.get("Potion") {
+                if let Some(idx) = crate::item::potion_index(p) {
+                    stack.potion = idx;
+                }
+            }
         }
     }
     Ok(stack)

@@ -508,6 +508,7 @@ async fn play_loop<R: AsyncRead + Unpin>(
                     && !try_use_bed(shared, player, x, y, z)
                     && !try_open_container(shared, player, x, y, z)
                     && !try_open_furnace(shared, player, x, y, z)
+                    && !try_open_brewing(shared, player, x, y, z)
                     && !try_read_sign(shared, player, x, y, z)
                 {
                     place_block(shared, player, x, y, z, face);
@@ -515,7 +516,7 @@ async fn play_loop<R: AsyncRead + Unpin>(
                 player.send(cb::acknowledge_block_change(sequence));
             }
             Play::UseItem => {
-                if !try_shoot_bow(shared, player) {
+                if !try_shoot_bow(shared, player) && !try_drink(shared, player) {
                     try_eat(shared, player);
                 }
             }
@@ -540,6 +541,7 @@ async fn play_loop<R: AsyncRead + Unpin>(
                     s.open_container = None;
                     s.open_merchant = false;
                     s.open_furnace = None;
+                    s.open_brewing = None;
                 });
             }
             Play::UseEntity { target, interaction } => {
@@ -1180,6 +1182,19 @@ fn try_open_furnace(shared: &Arc<Shared>, player: &Player, x: i32, y: i32, z: i3
     true
 }
 
+/// Open the brewing screen if the player clicked a brewing stand.
+fn try_open_brewing(shared: &Arc<Shared>, player: &Player, x: i32, y: i32, z: i32) -> bool {
+    let is_stand = {
+        let mut w = shared.dim_world(player.state().dimension).lock().unwrap();
+        cubeplane_world::block::info(w.get_block(x, y, z)).name == "brewing_stand"
+    };
+    if !is_stand {
+        return false;
+    }
+    crate::brewing::open(shared, player, (x, y, z));
+    true
+}
+
 /// Read (and re-open for editing) a sign the player clicked. Returns true if a
 /// sign was clicked.
 fn try_read_sign(shared: &Arc<Shared>, player: &Player, x: i32, y: i32, z: i32) -> bool {
@@ -1232,10 +1247,14 @@ fn apply_window_click(shared: &Arc<Shared>, player: &Player, window_id: u8, chan
     if player.state().open_merchant {
         return;
     }
-    // Furnace window routes to the furnace block entity.
+    // Furnace / brewing windows route to their block entities.
     if window_id != 0 {
         if let Some(pos) = player.state().open_furnace {
             crate::furnace::click(shared, player, pos, changed);
+            return;
+        }
+        if let Some(pos) = player.state().open_brewing {
+            crate::brewing::click(shared, player, pos, changed);
             return;
         }
     }
@@ -1349,6 +1368,16 @@ fn break_block(shared: &Arc<Shared>, player: &Player, x: i32, y: i32, z: i32, cr
             }
         }
     }
+    // Breaking a brewing stand spills its contents.
+    if cubeplane_world::block::info(previous).name == "brewing_stand" {
+        if let Some(s) = shared.remove_brewing((x, y, z)) {
+            for st in s.bottles.into_iter().chain([s.ingredient]) {
+                if !st.is_empty() {
+                    drops::spawn_item(shared, st.id, st.count, x as f64 + 0.5, y as f64 + 0.5, z as f64 + 0.5, 10);
+                }
+            }
+        }
+    }
     // Overworld simulations: fluids flow in, blocks above may fall, redstone.
     if dim == 0 {
         shared.schedule_fluid(x, y, z);
@@ -1400,9 +1429,12 @@ fn place_block(shared: &Arc<Shared>, player: &Player, x: i32, y: i32, z: i32, fa
     if cubeplane_world::block::info(state).name.ends_with("_sign") {
         player.send(cb::open_sign_editor(px, py, pz));
     }
-    // Placing a furnace creates its block entity.
+    // Placing a furnace / brewing stand creates its block entity.
     if cubeplane_world::block::info(state).name == "furnace" {
         shared.ensure_furnace((px, py, pz));
+    }
+    if cubeplane_world::block::info(state).name == "brewing_stand" {
+        shared.ensure_brewing((px, py, pz));
     }
     // Overworld simulations only.
     if dim == 0 {
@@ -1431,6 +1463,32 @@ fn place_block(shared: &Arc<Shared>, player: &Player, x: i32, y: i32, z: i32, fa
 }
 
 /// Eat the held food item if the player is hungry.
+/// Drink a held potion: apply its effect and return a glass bottle.
+fn try_drink(shared: &Arc<Shared>, player: &Player) -> bool {
+    let held_slot = player.state().held_slot;
+    let held = player.inventory(|i| i.held(held_slot));
+    if item::name_of(held.id) != Some("potion") {
+        return false;
+    }
+    if let Some(name) = held.potion_name() {
+        if let Some((id, amp, secs)) = item::potion_effect(name) {
+            crate::effects::apply(shared, player, id, amp, secs);
+        }
+    }
+    let s = player.state();
+    player.send(cb::sound_effect("entity.generic.drink", 7, s.x, s.y, s.z, 1.0, 1.0));
+    if player.gamemode() != 1 {
+        player.inventory(|i| i.consume_held(held_slot));
+        if let Some(bottle) = item::id_any("glass_bottle") {
+            player.inventory(|i| {
+                i.add(bottle, 1);
+            });
+        }
+        player.sync_inventory();
+    }
+    true
+}
+
 fn try_eat(shared: &Arc<Shared>, player: &Player) {
     let held = player.state().held_slot;
     let stack = player.inventory(|inv| inv.held(held));

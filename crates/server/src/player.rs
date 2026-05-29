@@ -41,6 +41,8 @@ pub struct PlayerState {
     pub open_merchant: bool,
     /// Position of the furnace whose window is open, if any.
     pub open_furnace: Option<(i32, i32, i32)>,
+    /// Position of the brewing stand whose window is open, if any.
+    pub open_brewing: Option<(i32, i32, i32)>,
     /// Entity id of the vehicle the player is riding, if any.
     pub riding: Option<i32>,
     /// Entity id of the AI villager the player is currently conversing with.
@@ -75,6 +77,7 @@ impl PlayerState {
             open_container: None,
             open_merchant: false,
             open_furnace: None,
+            open_brewing: None,
             riding: None,
             talking_to: None,
             spawn_point: None,

@@ -6,6 +6,7 @@
 //! API consumed by the Atlas admin panel.
 
 mod ai;
+mod brewing;
 mod clientbound;
 mod codec;
 mod combat;
@@ -336,9 +337,10 @@ async fn game_loop(shared: Arc<Shared>) {
         if ticks.is_multiple_of(5) {
             sim::fluid_tick(&shared);
         }
-        // Furnaces smelt every other tick.
+        // Furnaces smelt and brewing stands brew every other tick.
         if ticks.is_multiple_of(2) {
             furnace::tick(&shared);
+            brewing::tick(&shared);
         }
         // Random-tick growth and fire every ~2 seconds.
         if ticks.is_multiple_of(40) {
