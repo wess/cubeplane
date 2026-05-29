@@ -27,6 +27,20 @@ fn read_slot<B: Buf>(b: &mut B) -> Result<ItemStack> {
             if let Some(cubeplane_nbt::Value::Int(d)) = m.get("Damage") {
                 stack.damage = (*d).max(0) as u16;
             }
+            if let Some(cubeplane_nbt::Value::List(list)) = m.get("Enchantments") {
+                if let Some(cubeplane_nbt::Value::Compound(e)) = list.first() {
+                    if let Some(cubeplane_nbt::Value::String(id)) = e.get("id") {
+                        if let Some(idx) = crate::item::enchant_index(id) {
+                            stack.ench = idx;
+                            stack.ench_lvl = match e.get("lvl") {
+                                Some(cubeplane_nbt::Value::Short(l)) => (*l).max(1) as u8,
+                                Some(cubeplane_nbt::Value::Int(l)) => (*l).max(1) as u8,
+                                _ => 1,
+                            };
+                        }
+                    }
+                }
+            }
         }
     }
     Ok(stack)

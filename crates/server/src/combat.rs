@@ -18,9 +18,11 @@ pub fn damage_player(shared: &Arc<Shared>, player: &Player, amount: f32, cause: 
         return;
     }
 
-    // Armor reduces incoming damage by 4% per point (capped at 80%).
-    let defense = player.inventory(|inv| inv.armor_defense());
-    let amount = amount * (1.0 - (defense * 0.04).min(0.8));
+    // Armor reduces incoming damage by 4% per point (capped at 80%), and the
+    // Protection enchant adds ~4% per level on top (combined cap 85%).
+    let (defense, prot) = player.inventory(|inv| (inv.armor_defense(), inv.protection_levels()));
+    let reduction = (defense * 0.04 + prot as f32 * 0.04).min(0.85);
+    let amount = amount * (1.0 - reduction);
 
     let (new_health, food, saturation, just_died) = player.update(|s| {
         if s.dead {

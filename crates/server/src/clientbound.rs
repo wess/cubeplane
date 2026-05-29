@@ -24,8 +24,18 @@ fn write_slot(b: &mut BytesMut, stack: ItemStack) {
         b.write_bool(true);
         b.write_varint(stack.id);
         b.write_i8(stack.count as i8);
-        if stack.damage > 0 {
-            let nbt = cubeplane_nbt::Nbt::compound().put_int("Damage", stack.damage as i32);
+        if stack.damage > 0 || stack.ench > 0 {
+            let mut nbt = cubeplane_nbt::Nbt::compound();
+            if stack.damage > 0 {
+                nbt = nbt.put_int("Damage", stack.damage as i32);
+            }
+            if let Some((name, lvl)) = stack.enchant() {
+                let entry = cubeplane_nbt::Nbt::compound()
+                    .put_string("id", format!("minecraft:{name}"))
+                    .put_short("lvl", lvl as i16)
+                    .into_value();
+                nbt = nbt.put_list("Enchantments", vec![entry]);
+            }
             b.write_bytes(&nbt.to_bytes_named(""));
         } else {
             b.write_u8(0); // optionalNbt absent = TAG_End

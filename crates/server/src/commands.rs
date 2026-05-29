@@ -145,6 +145,27 @@ pub fn dispatch(shared: &Arc<Shared>, player: &Player, name: &str, args: &[Strin
             combat::revive(player);
             tell(player, "Healed.", "green");
         }
+        "enchant" => {
+            if !require_op(player, op) {
+                return true;
+            }
+            match args.first().and_then(|n| item::enchant_index(n)) {
+                Some(idx) => {
+                    let lvl: u8 = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(1).clamp(1, 5);
+                    let held = player.state().held_slot;
+                    let mut stack = player.inventory(|i| i.held(held));
+                    if stack.is_empty() {
+                        tell(player, "Hold an item to enchant.", "red");
+                        return true;
+                    }
+                    stack.ench = idx;
+                    stack.ench_lvl = lvl;
+                    player.set_slot(crate::inventory::HOTBAR_START + held as usize, stack);
+                    tell(player, format!("Enchanted held item with {} {lvl}", args[0]), "green");
+                }
+                None => tell(player, format!("usage: /enchant <{}> [level]", item::ENCHANTS.join("|")), "red"),
+            }
+        }
         "vehicle" => {
             if !require_op(player, op) {
                 return true;

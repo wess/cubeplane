@@ -301,6 +301,7 @@ where
         ("gamemode", true), ("give", true), ("time", true), ("weather", true),
         ("summon", true), ("effect", true), ("heal", false), ("kill", false),
         ("clear", false), ("xp", true), ("vehicle", true), ("craft", true), ("dimension", true),
+        ("enchant", true),
     ]));
     player.send(cb::tab_list_header(
         &text::colored("cubeplane", "gold"),
@@ -544,13 +545,18 @@ async fn play_loop<R: AsyncRead + Unpin>(
             Play::UseEntity { target, interaction } => {
                 if player.is_dead() {
                 } else if interaction == 1 {
-                    let mut damage = match player.inventory(|inv| inv.held(player.state().held_slot)).def() {
+                    let held = player.inventory(|inv| inv.held(player.state().held_slot));
+                    let mut damage = match held.def() {
                         Some(d) => match d.kind {
                             item::ItemKind::Weapon(dmg) => dmg,
                             _ => 1.0,
                         },
                         None => 1.0,
                     };
+                    // Sharpness enchant adds damage.
+                    if let Some(("sharpness", lvl)) = held.enchant() {
+                        damage += lvl as f32;
+                    }
                     // Strength effect adds 3 damage per level.
                     if let Some(amp) = shared.effect_amplifier(player.entity_id, crate::effects::STRENGTH) {
                         damage += 3.0 * (amp.max(0) as f32 + 1.0);
@@ -1120,6 +1126,12 @@ fn damage_held_tool(shared: &Arc<Shared>, player: &Player) {
     let Some(max) = item::max_durability(stack.id) else {
         return;
     };
+    // Unbreaking: chance to skip wear (level/(level+1)).
+    if let Some(("unbreaking", lvl)) = stack.enchant() {
+        if rand::random::<f32>() < lvl as f32 / (lvl as f32 + 1.0) {
+            return;
+        }
+    }
     stack.damage += 1;
     let slot = crate::inventory::HOTBAR_START + held as usize;
     if stack.damage >= max {

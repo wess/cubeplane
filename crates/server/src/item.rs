@@ -38,16 +38,33 @@ pub struct ItemStack {
     pub count: u8,
     /// Durability damage taken (0 = pristine). Only meaningful for tools.
     pub damage: u16,
+    /// A single enchantment index (1-based into [`ENCHANTS`]; 0 = none).
+    pub ench: u8,
+    /// The level of that enchantment.
+    pub ench_lvl: u8,
 }
 
+/// The enchantments cubeplane models (one per item). Index+1 is stored on the
+/// stack; the wire form uses `minecraft:<name>`.
+pub const ENCHANTS: &[&str] = &["sharpness", "protection", "unbreaking", "efficiency", "power", "fire_aspect"];
+
 impl ItemStack {
-    pub const EMPTY: ItemStack = ItemStack { id: 0, count: 0, damage: 0 };
+    pub const EMPTY: ItemStack = ItemStack { id: 0, count: 0, damage: 0, ench: 0, ench_lvl: 0 };
 
     pub fn new(id: i32, count: u8) -> Self {
         if id == 0 || count == 0 {
             ItemStack::EMPTY
         } else {
-            ItemStack { id, count, damage: 0 }
+            ItemStack { id, count, damage: 0, ench: 0, ench_lvl: 0 }
+        }
+    }
+
+    /// The enchantment on this stack, if any, as `(name, level)`.
+    pub fn enchant(&self) -> Option<(&'static str, u8)> {
+        if self.ench == 0 {
+            None
+        } else {
+            ENCHANTS.get(self.ench as usize - 1).map(|n| (*n, self.ench_lvl.max(1)))
         }
     }
 
@@ -83,6 +100,12 @@ pub fn max_durability(id: i32) -> Option<u16> {
         _ => return None,
     };
     Some(d)
+}
+
+/// The 1-based enchant index for a name, for storing on an [`ItemStack`].
+pub fn enchant_index(name: &str) -> Option<u8> {
+    let key = name.strip_prefix("minecraft:").unwrap_or(name);
+    ENCHANTS.iter().position(|n| *n == key).map(|i| i as u8 + 1)
 }
 
 fn is_tool_name(n: &str) -> bool {
@@ -235,6 +258,16 @@ mod tests {
         assert!(ItemStack::new(0, 5).is_empty());
         assert!(ItemStack::new(5, 0).is_empty());
         assert!(!ItemStack::new(1, 1).is_empty());
+    }
+
+    #[test]
+    fn enchantments() {
+        let idx = enchant_index("minecraft:sharpness").unwrap();
+        let mut s = ItemStack::new(id_any("iron_sword").unwrap(), 1);
+        s.ench = idx;
+        s.ench_lvl = 3;
+        assert_eq!(s.enchant(), Some(("sharpness", 3)));
+        assert_eq!(enchant_index("nonexistent"), None);
     }
 
     #[test]

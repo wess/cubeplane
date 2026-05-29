@@ -131,6 +131,16 @@ impl Inventory {
         count == 0
     }
 
+    /// Total Protection enchant levels across worn armour.
+    pub fn protection_levels(&self) -> u32 {
+        (ARMOR_START..ARMOR_START + 4)
+            .filter_map(|s| match self.slots[s].enchant() {
+                Some(("protection", lvl)) => Some(lvl as u32),
+                _ => None,
+            })
+            .sum()
+    }
+
     /// Total defense points from worn armor.
     pub fn armor_defense(&self) -> f32 {
         (ARMOR_START..ARMOR_START + 4)
