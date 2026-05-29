@@ -76,6 +76,8 @@ pub struct Shared {
     ai: RwLock<AiConfig>,
     /// Per-villager personalities and conversations.
     villagers: RwLock<HashMap<i32, VillagerBrain>>,
+    /// Active status effects per player entity id.
+    effects: RwLock<HashMap<i32, Vec<crate::effects::ActiveEffect>>>,
     started: Instant,
 }
 
@@ -107,6 +109,7 @@ impl Shared {
             raining: std::sync::atomic::AtomicBool::new(false),
             ai: RwLock::new(config_ai),
             villagers: RwLock::new(HashMap::new()),
+            effects: RwLock::new(HashMap::new()),
             mods,
             server_key,
             started: Instant::now(),
@@ -418,6 +421,36 @@ impl Shared {
     /// Mutate a villager's brain.
     pub fn with_villager<R>(&self, entity_id: i32, f: impl FnOnce(&mut VillagerBrain) -> R) -> Option<R> {
         self.villagers.write().unwrap().get_mut(&entity_id).map(f)
+    }
+
+    /// Add a status effect to a player (replacing an existing one of same id).
+    pub fn add_effect(&self, eid: i32, effect: crate::effects::ActiveEffect) {
+        let mut map = self.effects.write().unwrap();
+        let list = map.entry(eid).or_default();
+        list.retain(|e| e.id != effect.id);
+        list.push(effect);
+    }
+
+    /// Snapshot a player's active effects.
+    pub fn player_effects(&self, eid: i32) -> Vec<crate::effects::ActiveEffect> {
+        self.effects.read().unwrap().get(&eid).cloned().unwrap_or_default()
+    }
+
+    /// Mutate a player's effect list.
+    pub fn update_effects(&self, eid: i32, f: impl FnOnce(&mut Vec<crate::effects::ActiveEffect>)) {
+        if let Some(list) = self.effects.write().unwrap().get_mut(&eid) {
+            f(list);
+        }
+    }
+
+    /// The amplifier of an active effect on a player, if present.
+    pub fn effect_amplifier(&self, eid: i32, id: i32) -> Option<i8> {
+        self.effects.read().unwrap().get(&eid)?.iter().find(|e| e.id == id).map(|e| e.amplifier)
+    }
+
+    /// Clear all of a player's effects (on leave/respawn).
+    pub fn clear_effects(&self, eid: i32) {
+        self.effects.write().unwrap().remove(&eid);
     }
 
     /// Fire an event into the mod runtime, if mods are enabled.

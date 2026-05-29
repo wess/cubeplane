@@ -102,6 +102,17 @@ pub fn hunger_tick(shared: &Arc<Shared>) {
     }
 }
 
+/// Heal a living player by `amount` (clamped to full), updating their HUD.
+pub fn heal(player: &Player, amount: f32) {
+    let (h, f, sat) = player.update(|s| {
+        if !s.dead {
+            s.health = (s.health + amount).min(MAX_HEALTH);
+        }
+        (s.health, s.food, s.saturation)
+    });
+    player.send(cb::update_health(h, f, sat));
+}
+
 /// Grant experience and update the XP HUD. Levels use a simple linear curve.
 pub fn grant_xp(player: &Player, amount: i32) {
     let total = player.update(|s| {

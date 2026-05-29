@@ -132,10 +132,10 @@ pub fn dispatch(shared: &Arc<Shared>, player: &Player, name: &str, args: &[Strin
                 Some(id) => {
                     let secs: i32 = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(30);
                     let amp: i8 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(0);
-                    player.send(cb::entity_effect(player.entity_id, id, amp, secs * 20, 0x02));
+                    crate::effects::apply(shared, player, id, amp, secs);
                     tell(player, format!("Applied effect {}", args[0]), "green");
                 }
-                None => tell(player, "usage: /effect <speed|regeneration|strength|jump_boost|night_vision> [secs] [amp]", "red"),
+                None => tell(player, "usage: /effect <speed|strength|regeneration|poison|instant_health|...> [secs] [amp]", "red"),
             }
         }
         "heal" => {
@@ -283,6 +283,8 @@ fn effect_id(name: &str) -> Option<i32> {
         "slowness" => 2,
         "haste" => 3,
         "strength" => 5,
+        "instant_health" => 6,
+        "instant_damage" => 7,
         "jump_boost" => 8,
         "regeneration" => 10,
         "resistance" => 11,
@@ -290,6 +292,7 @@ fn effect_id(name: &str) -> Option<i32> {
         "water_breathing" => 13,
         "invisibility" => 14,
         "night_vision" => 16,
+        "poison" => 19,
         _ => return None,
     })
 }

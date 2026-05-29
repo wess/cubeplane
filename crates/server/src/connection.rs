@@ -391,6 +391,7 @@ where
         let _ = crate::persistence::save_player(&save_dir, uuid, &player.snapshot_data());
     }
     shared.remove_player(entity_id);
+    shared.clear_effects(entity_id);
     shared.broadcast(cb::player_info_remove(&[uuid]));
     shared.broadcast(cb::remove_entities(&[entity_id]));
     let leave_msg = text::system_notice(format!("{name} left the cubeplane"));
@@ -542,13 +543,17 @@ async fn play_loop<R: AsyncRead + Unpin>(
             Play::UseEntity { target, interaction } => {
                 if player.is_dead() {
                 } else if interaction == 1 {
-                    let damage = match player.inventory(|inv| inv.held(player.state().held_slot)).def() {
+                    let mut damage = match player.inventory(|inv| inv.held(player.state().held_slot)).def() {
                         Some(d) => match d.kind {
                             item::ItemKind::Weapon(dmg) => dmg,
                             _ => 1.0,
                         },
                         None => 1.0,
                     };
+                    // Strength effect adds 3 damage per level.
+                    if let Some(amp) = shared.effect_amplifier(player.entity_id, crate::effects::STRENGTH) {
+                        damage += 3.0 * (amp.max(0) as f32 + 1.0);
+                    }
                     mobs::player_attack(shared, player, target, damage);
                     if player.gamemode() != 1 {
                         damage_held_tool(shared, player);

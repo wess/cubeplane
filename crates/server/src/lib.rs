@@ -14,6 +14,7 @@ mod config;
 mod connection;
 mod control;
 mod drops;
+mod effects;
 mod encryption;
 mod entity;
 mod furnace;
@@ -323,6 +324,11 @@ async fn game_loop(shared: Arc<Shared>) {
         // Natural health regeneration every four seconds.
         if ticks.is_multiple_of(80) {
             combat::regenerate(&shared);
+        }
+
+        // Status effects tick once a second.
+        if ticks.is_multiple_of(20) {
+            effects::tick(&shared);
         }
 
         // Fluid flow drains its queue frequently (cheap when idle).

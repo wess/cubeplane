@@ -641,6 +641,14 @@ pub fn set_experience(bar: f32, level: i32, total: i32) -> BytesMut {
     b
 }
 
+/// Remove a status effect from an entity.
+pub fn remove_entity_effect(entity_id: i32, effect_id: i32) -> BytesMut {
+    let mut b = pkt(play_cb::REMOVE_ENTITY_EFFECT);
+    b.write_varint(entity_id);
+    b.write_varint(effect_id);
+    b
+}
+
 /// Apply a status effect to an entity. `flags`: bit0 ambient, bit1 particles.
 pub fn entity_effect(entity_id: i32, effect_id: i32, amplifier: i8, duration: i32, flags: i8) -> BytesMut {
     let mut b = pkt(play_cb::ENTITY_EFFECT);
