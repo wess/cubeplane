@@ -29,17 +29,38 @@ pub fn translate_clientbound(payload: BytesMut, protocol: i32) -> BytesMut {
         Err(_) => return body, // malformed; pass through untouched
     };
     let wire = remap_play_clientbound(canonical, protocol);
-    if wire == canonical {
-        // Re-prepend the original id without copying the body's meaning.
-        let mut out = BytesMut::with_capacity(body.len() + 3);
-        out.write_varint(canonical);
-        out.extend_from_slice(&body);
-        return out;
-    }
+    // Rewrite the body for packets whose field layout changed in the target
+    // version (e.g. 1.20.2's nameless network NBT). Identity when unchanged.
+    let rewritten = rewrite_clientbound_body(canonical, protocol, &body);
+    let body: &[u8] = rewritten.as_deref().unwrap_or(&body);
     let mut out = BytesMut::with_capacity(body.len() + 3);
     out.write_varint(wire);
-    out.extend_from_slice(&body);
+    out.extend_from_slice(body);
     out
+}
+
+/// Rewrite a clientbound play packet body from the canonical 763 layout to a
+/// target protocol's. Returns `Some(new_body)` when a rewrite applied, `None`
+/// when the body is already wire-compatible.
+fn rewrite_clientbound_body(canonical_id: i32, protocol: i32, body: &[u8]) -> Option<Vec<u8>> {
+    if protocol != PROTO_1_20_2 {
+        return None;
+    }
+    match canonical_id {
+        // map_chunk (763 0x24): x:i32, z:i32, heightmaps:NBT, ... — 1.20.2 makes
+        // the heightmaps a nameless network NBT.
+        0x24 => {
+            if body.len() < 8 {
+                return None;
+            }
+            let mut out = Vec::with_capacity(body.len());
+            out.extend_from_slice(&body[0..8]);
+            let consumed = named_root_nbt_to_anonymous(&body[8..], &mut out)?;
+            out.extend_from_slice(&body[8 + consumed..]);
+            Some(out)
+        }
+        _ => None,
+    }
 }
 
 /// Translate an inbound serverbound play payload from `protocol`'s wire format
@@ -125,6 +146,82 @@ fn apply_map(id: i32, map: &[(i32, i32)]) -> i32 {
     map.iter().find(|(from, _)| *from == id).map(|(_, to)| *to).unwrap_or(id)
 }
 
+/// Convert a *named* root NBT compound (the 763 wire form: `0x0A` tag, a u16
+/// name length, the name bytes, then the payload) into the *anonymous* network
+/// NBT form 1.20.2+ uses (`0x0A` tag immediately followed by the payload, no
+/// name). This is the keystone of 763→764 body translation: every packet NBT
+/// field — chunk heightmaps, item-slot tags, the registry codec — changed to
+/// this nameless form in 1.20.2. Returns the number of bytes consumed and writes
+/// the converted compound to `out`.
+///
+/// `TAG_End` (`0x00`, an empty/absent compound) passes through unchanged.
+pub fn named_root_nbt_to_anonymous(buf: &[u8], out: &mut Vec<u8>) -> Option<usize> {
+    match buf.first()? {
+        0x00 => {
+            out.push(0x00); // empty NBT marker, identical in both forms
+            Some(1)
+        }
+        0x0a => {
+            // 0x0A tag, u16 big-endian name length, name bytes, then payload.
+            let name_len = u16::from_be_bytes([*buf.get(1)?, *buf.get(2)?]) as usize;
+            let payload_start = 3 + name_len;
+            if buf.len() < payload_start {
+                return None;
+            }
+            // The remaining payload is a compound body terminated by TAG_End; we
+            // copy from here to the matching end of the compound.
+            let consumed_payload = compound_body_len(&buf[payload_start..])?;
+            out.push(0x0a); // anonymous compound: tag with no name
+            out.extend_from_slice(&buf[payload_start..payload_start + consumed_payload]);
+            Some(payload_start + consumed_payload)
+        }
+        _ => None, // not a root compound
+    }
+}
+
+/// Length in bytes of a compound's body (its child tags up to and including the
+/// closing `TAG_End`), starting at the first child tag.
+fn compound_body_len(buf: &[u8]) -> Option<usize> {
+    let mut i = 0;
+    loop {
+        let tag = *buf.get(i)?;
+        i += 1;
+        if tag == 0x00 {
+            return Some(i); // TAG_End closes the compound
+        }
+        // Named child: u16 name length + name, then a payload of the tag's type.
+        let name_len = u16::from_be_bytes([*buf.get(i)?, *buf.get(i + 1)?]) as usize;
+        i += 2 + name_len;
+        i += payload_len(tag, &buf[i..])?;
+    }
+}
+
+/// Length of a tag payload of the given type id, given the bytes that follow.
+fn payload_len(tag: u8, buf: &[u8]) -> Option<usize> {
+    Some(match tag {
+        1 => 1,                                          // byte
+        2 => 2,                                          // short
+        3 | 5 => 4,                                      // int / float
+        4 | 6 => 8,                                      // long / double
+        7 => 4 + i32::from_be_bytes(buf.get(0..4)?.try_into().ok()?).max(0) as usize, // byte array
+        8 => 2 + u16::from_be_bytes([*buf.first()?, *buf.get(1)?]) as usize, // string
+        9 => {
+            // list: element type, i32 count, then count payloads.
+            let elem = *buf.first()?;
+            let count = i32::from_be_bytes(buf.get(1..5)?.try_into().ok()?).max(0) as usize;
+            let mut i = 5;
+            for _ in 0..count {
+                i += payload_len(elem, &buf[i..])?;
+            }
+            i
+        }
+        10 => compound_body_len(buf)?,                   // nested compound
+        11 => 4 + 4 * i32::from_be_bytes(buf.get(0..4)?.try_into().ok()?).max(0) as usize, // int array
+        12 => 4 + 8 * i32::from_be_bytes(buf.get(0..4)?.try_into().ok()?).max(0) as usize, // long array
+        _ => return None,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -194,6 +291,65 @@ mod tests {
         assert_eq!(remap_play_serverbound(0x0d, PROTO_1_20_2), 0x0b);
         // teleport_confirm (0x00) is unchanged.
         assert_eq!(remap_play_serverbound(0x00, PROTO_1_20_2), 0x00);
+    }
+
+    #[test]
+    fn nbt_named_to_anonymous_strips_root_name() {
+        // Build a realistic named root compound with several tag types.
+        let named = cubeplane_nbt::Nbt::compound()
+            .put_int("Foo", 5)
+            .put_string("Bar", "hi")
+            .put_long_array("Nums", vec![7, 8, 9])
+            .put_compound("Sub", cubeplane_nbt::Nbt::compound().put_byte("Q", 2))
+            .to_bytes_named("Root");
+        let mut out = Vec::new();
+        let consumed = named_root_nbt_to_anonymous(&named, &mut out).unwrap();
+        // The whole compound is consumed, nothing more.
+        assert_eq!(consumed, named.len());
+        // Result is the anonymous form: 0x0A tag, then the payload with the
+        // 2-byte length + 4-byte "Root" name removed.
+        assert_eq!(out[0], 0x0a);
+        assert_eq!(&out[1..], &named[3 + 4..]);
+    }
+
+    #[test]
+    fn nbt_converter_consumes_only_the_compound() {
+        let named = cubeplane_nbt::Nbt::compound().put_byte("B", 1).to_bytes_named("X");
+        let mut framed = named.clone();
+        framed.extend_from_slice(&[0xde, 0xad, 0xbe, 0xef]); // trailing bytes
+        let mut out = Vec::new();
+        let consumed = named_root_nbt_to_anonymous(&framed, &mut out).unwrap();
+        assert_eq!(consumed, named.len(), "must stop at the compound's end");
+    }
+
+    #[test]
+    fn map_chunk_body_rewritten_for_764() {
+        // Build a map_chunk-shaped body: x, z, a named heightmaps NBT, then a
+        // trailing byte standing in for the chunk payload.
+        let heightmaps = cubeplane_nbt::Nbt::compound()
+            .put_long_array("MOTION_BLOCKING", vec![1, 2])
+            .to_bytes_named("");
+        let mut body = Vec::new();
+        body.extend_from_slice(&1i32.to_be_bytes()); // x
+        body.extend_from_slice(&2i32.to_be_bytes()); // z
+        body.extend_from_slice(&heightmaps);
+        body.push(0xff); // trailing chunk data
+        let out = rewrite_clientbound_body(0x24, PROTO_1_20_2, &body).unwrap();
+        // x/z preserved, the NBT is now anonymous (one byte shorter: dropped the
+        // empty name's 2-byte length), trailing byte preserved.
+        assert_eq!(&out[0..8], &body[0..8]);
+        assert_eq!(out[8], 0x0a); // compound tag, no name length follows
+        assert_eq!(*out.last().unwrap(), 0xff);
+        assert_eq!(out.len(), body.len() - 2); // the u16 empty-name length removed
+        // Non-1.20.2 protocols leave the body untouched.
+        assert!(rewrite_clientbound_body(0x24, 700, &body).is_none());
+    }
+
+    #[test]
+    fn nbt_empty_tag_end_passthrough() {
+        let mut out = Vec::new();
+        assert_eq!(named_root_nbt_to_anonymous(&[0x00], &mut out), Some(1));
+        assert_eq!(out, vec![0x00]);
     }
 
     #[test]
