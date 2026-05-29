@@ -23,16 +23,10 @@ async fn main() -> ExitCode {
 
     print_banner(&config);
 
-    tokio::select! {
-        result = cubeplane_server::run(config) => {
-            if let Err(e) = result {
-                tracing::error!("server error: {e}");
-                return ExitCode::FAILURE;
-            }
-        }
-        _ = tokio::signal::ctrl_c() => {
-            tracing::info!("shutting down");
-        }
+    // `run` handles Ctrl-C internally so it can flush a final save.
+    if let Err(e) = cubeplane_server::run(config).await {
+        tracing::error!("server error: {e}");
+        return ExitCode::FAILURE;
     }
     ExitCode::SUCCESS
 }

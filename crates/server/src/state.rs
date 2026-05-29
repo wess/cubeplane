@@ -156,6 +156,11 @@ impl Shared {
         self.vehicles.read().unwrap().values().cloned().collect()
     }
 
+    /// Snapshot all dropped item entities.
+    pub fn item_entities(&self) -> Vec<ItemEntity> {
+        self.items.read().unwrap().values().cloned().collect()
+    }
+
     /// Mutate a vehicle in place.
     pub fn with_vehicle<R>(&self, entity_id: i32, f: impl FnOnce(&mut Vehicle) -> R) -> Option<R> {
         self.vehicles.write().unwrap().get_mut(&entity_id).map(f)

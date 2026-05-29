@@ -113,6 +113,55 @@ pub fn load_containers(dir: &Path) -> Vec<ContainerEntry> {
         .unwrap_or_default()
 }
 
+/// World metadata persisted alongside chunks (time of day, etc.).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct WorldMeta {
+    pub time: i64,
+}
+
+/// Live entities persisted across restarts.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct EntitySave {
+    /// `(mob name, x, y, z, yaw, health)`.
+    pub mobs: Vec<(String, f64, f64, f64, f32, f32)>,
+    /// `(type id, x, y, z, yaw)`.
+    pub vehicles: Vec<(i32, f64, f64, f64, f32)>,
+    /// `(item id, count, x, y, z)`.
+    pub items: Vec<(i32, u8, f64, f64, f64)>,
+}
+
+fn meta_path(dir: &Path) -> PathBuf {
+    dir.join("world_meta.json")
+}
+
+fn entities_path(dir: &Path) -> PathBuf {
+    dir.join("entities.json")
+}
+
+pub fn save_meta(dir: &Path, meta: &WorldMeta) -> io::Result<()> {
+    std::fs::create_dir_all(dir)?;
+    std::fs::write(meta_path(dir), serde_json::to_string(meta).map_err(io::Error::other)?)
+}
+
+pub fn load_meta(dir: &Path) -> WorldMeta {
+    std::fs::read_to_string(meta_path(dir))
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or_default()
+}
+
+pub fn save_entities(dir: &Path, ents: &EntitySave) -> io::Result<()> {
+    std::fs::create_dir_all(dir)?;
+    std::fs::write(entities_path(dir), serde_json::to_string(ents).map_err(io::Error::other)?)
+}
+
+pub fn load_entities(dir: &Path) -> EntitySave {
+    std::fs::read_to_string(entities_path(dir))
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or_default()
+}
+
 /// Load a player's saved data, if any.
 pub fn load_player(dir: &Path, uuid: Uuid) -> Option<PlayerData> {
     let text = std::fs::read_to_string(player_path(dir, uuid)).ok()?;
@@ -214,6 +263,26 @@ mod tests {
         store.save_chunk(3, -4, &grid).unwrap();
         assert_eq!(store.load_chunk(3, -4), Some(grid));
         assert_eq!(store.load_chunk(0, 0), None);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn meta_and_entities_roundtrip() {
+        let dir = std::env::temp_dir().join(format!("cp-ent-{}", std::process::id()));
+        save_meta(&dir, &WorldMeta { time: 13500 }).unwrap();
+        assert_eq!(load_meta(&dir).time, 13500);
+
+        let ents = EntitySave {
+            mobs: vec![("villager".into(), 1.0, 64.0, 2.0, 90.0, 18.0)],
+            vehicles: vec![(9, 3.0, 64.0, 4.0, 0.0)],
+            items: vec![(1, 5, 0.0, 64.0, 0.0)],
+        };
+        save_entities(&dir, &ents).unwrap();
+        let loaded = load_entities(&dir);
+        assert_eq!(loaded.mobs.len(), 1);
+        assert_eq!(loaded.mobs[0].0, "villager");
+        assert_eq!(loaded.vehicles[0].0, 9);
+        assert_eq!(loaded.items[0], (1, 5, 0.0, 64.0, 0.0));
         std::fs::remove_dir_all(&dir).ok();
     }
 

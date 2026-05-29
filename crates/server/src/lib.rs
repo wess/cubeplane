@@ -42,6 +42,8 @@ use cubeplane_mods::{ModEvent, ModRuntime};
 use cubeplane_protocol::{GAME_VERSION, PROTOCOL_VERSION};
 use cubeplane_world::{FlatGenerator, Generator, TerrainGenerator, World};
 
+use crate::entity::{ItemEntity, Mob, MobKind, Vehicle};
+
 pub use config::Config;
 pub use state::Shared;
 
@@ -122,6 +124,17 @@ pub async fn run(config: Config) -> Result<()> {
                 .collect();
             shared.load_containers(map);
         }
+        // Restore world clock and live entities.
+        let meta = persistence::load_meta(&save_dir);
+        if meta.time != 0 {
+            shared.set_time(meta.time);
+        }
+        let ents = persistence::load_entities(&save_dir);
+        let n = ents.mobs.len() + ents.vehicles.len() + ents.items.len();
+        restore_entities(&shared, ents);
+        if n > 0 {
+            info!("restored {n} saved entit(ies)");
+        }
     }
 
     shared.fire_mod(ModEvent::ServerStart {
@@ -135,7 +148,7 @@ pub async fn run(config: Config) -> Result<()> {
     tokio::spawn(game_loop(shared.clone()));
 
     if shared.config.world.save {
-        tokio::spawn(save_loop(shared.clone(), save_dir, region));
+        tokio::spawn(save_loop(shared.clone(), save_dir.clone(), region));
     }
 
     if shared.config.control.enabled {
@@ -154,17 +167,115 @@ pub async fn run(config: Config) -> Result<()> {
     let listener = TcpListener::bind(&addr).await?;
     info!("cubeplane listening on {addr} — Minecraft {GAME_VERSION} (protocol {PROTOCOL_VERSION})");
 
-    loop {
-        match listener.accept().await {
-            Ok((stream, _peer)) => {
-                let s = shared.clone();
-                tokio::spawn(connection::handle(stream, s));
-            }
-            Err(e) => {
-                error!("accept failed: {e}");
-                tokio::time::sleep(Duration::from_millis(100)).await;
+    // Accept connections until Ctrl-C, then flush a final save.
+    let accept = async {
+        loop {
+            match listener.accept().await {
+                Ok((stream, _peer)) => {
+                    let s = shared.clone();
+                    tokio::spawn(connection::handle(stream, s));
+                }
+                Err(e) => {
+                    error!("accept failed: {e}");
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
             }
         }
+    };
+    tokio::select! {
+        _ = accept => {}
+        _ = tokio::signal::ctrl_c() => {
+            info!("shutting down — saving world…");
+            shared.fire_mod(ModEvent::ServerStop);
+            if let Some(m) = &shared.mods {
+                m.shutdown();
+            }
+            if shared.config.world.save {
+                save_all(&shared, &save_dir, region);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Persist everything once: world (blocks or region), containers, players,
+/// live entities and the world clock.
+fn save_all(shared: &Arc<Shared>, save_dir: &std::path::Path, region: bool) {
+    if region {
+        let store = persistence::RegionStore::new(save_dir);
+        for ((cx, cz), grid) in shared.world.lock().unwrap().take_dirty_grids() {
+            let _ = store.save_chunk(cx, cz, &grid);
+        }
+    } else {
+        let edits = shared.world.lock().unwrap().edits().clone();
+        let _ = persistence::save_blocks(save_dir, &edits);
+    }
+
+    let containers: Vec<_> = shared
+        .containers_snapshot()
+        .into_iter()
+        .map(|(pos, stacks)| (pos, stacks.iter().map(|s| (s.id, s.count)).collect::<Vec<_>>()))
+        .collect();
+    let _ = persistence::save_containers(save_dir, &containers);
+
+    for player in shared.players() {
+        let _ = persistence::save_player(save_dir, player.uuid, &player.snapshot_data());
+    }
+
+    let _ = persistence::save_entities(save_dir, &snapshot_entities(shared));
+    let _ = persistence::save_meta(save_dir, &persistence::WorldMeta { time: shared.world_time() });
+}
+
+/// Capture live mobs, vehicles and dropped items for persistence.
+fn snapshot_entities(shared: &Arc<Shared>) -> persistence::EntitySave {
+    persistence::EntitySave {
+        mobs: shared
+            .mobs()
+            .iter()
+            .filter(|m| m.alive())
+            .map(|m| (m.kind.name().to_string(), m.x, m.y, m.z, m.yaw, m.health))
+            .collect(),
+        vehicles: shared.vehicles().iter().map(|v| (v.type_id, v.x, v.y, v.z, v.yaw)).collect(),
+        items: shared
+            .item_entities()
+            .iter()
+            .map(|i| (i.item_id, i.count, i.x, i.y, i.z))
+            .collect(),
+    }
+}
+
+/// Recreate saved mobs, vehicles and items at startup.
+fn restore_entities(shared: &Arc<Shared>, ents: persistence::EntitySave) {
+    for (name, x, y, z, yaw, health) in ents.mobs {
+        if let Some(kind) = MobKind::from_name(&name) {
+            let eid = shared.next_entity_id();
+            let mut mob = Mob::new(eid, kind, x, y, z, yaw.to_radians());
+            mob.health = health;
+            mob.yaw = yaw;
+            shared.add_mob(mob);
+            if kind.name() == "villager" {
+                shared.register_villager(eid);
+            }
+        }
+    }
+    for (type_id, x, y, z, yaw) in ents.vehicles {
+        let eid = shared.next_entity_id();
+        shared.add_vehicle(Vehicle { entity_id: eid, type_id, uuid: uuid::Uuid::new_v4(), x, y, z, yaw, rider: None });
+    }
+    for (item_id, count, x, y, z) in ents.items {
+        let eid = shared.next_entity_id();
+        shared.add_item_entity(ItemEntity {
+            entity_id: eid,
+            uuid: uuid::Uuid::new_v4(),
+            item_id,
+            count,
+            x,
+            y,
+            z,
+            on_ground: true,
+            age: 0,
+            pickup_delay: 0,
+        });
     }
 }
 
@@ -239,41 +350,12 @@ fn evict_chunks(shared: &Arc<Shared>) {
     }
 }
 
-/// Periodically persist world data and online players' data.
+/// Periodically persist the whole world and its players/entities.
 async fn save_loop(shared: Arc<Shared>, save_dir: std::path::PathBuf, region: bool) {
-    let store = region.then(|| persistence::RegionStore::new(&save_dir));
     let mut interval = tokio::time::interval(Duration::from_secs(60));
     interval.tick().await; // skip the immediate first tick
     loop {
         interval.tick().await;
-        if let Some(store) = &store {
-            // Region backend: write every chunk changed this session in full.
-            let dirty = shared.world.lock().unwrap().take_dirty_grids();
-            for ((cx, cz), grid) in dirty {
-                if let Err(e) = store.save_chunk(cx, cz, &grid) {
-                    error!("failed to save chunk {cx},{cz}: {e}");
-                }
-            }
-        } else {
-            let edits = shared.world.lock().unwrap().edits().clone();
-            if let Err(e) = persistence::save_blocks(&save_dir, &edits) {
-                error!("failed to save world: {e}");
-            }
-        }
-
-        // Persist chest contents.
-        let entries: Vec<_> = shared
-            .containers_snapshot()
-            .into_iter()
-            .map(|(pos, stacks)| {
-                let items: Vec<(i32, u8)> = stacks.iter().map(|s| (s.id, s.count)).collect();
-                (pos, items)
-            })
-            .collect();
-        let _ = persistence::save_containers(&save_dir, &entries);
-
-        for player in shared.players() {
-            let _ = persistence::save_player(&save_dir, player.uuid, &player.snapshot_data());
-        }
+        save_all(&shared, &save_dir, region);
     }
 }

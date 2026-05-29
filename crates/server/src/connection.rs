@@ -399,9 +399,16 @@ async fn play_loop<R: AsyncRead + Unpin>(
     last_center: &mut (i32, i32),
 ) -> Result<()> {
     loop {
-        let frame = match read_frame(reader, threshold).await {
-            Ok(f) => f,
-            Err(_) => break,
+        // Liveness: the server sends keep-alives every 10s, so a live client
+        // produces inbound traffic well within 30s. No data for 30s ⇒ drop.
+        let frame = match tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            read_frame(reader, threshold),
+        )
+        .await
+        {
+            Ok(Ok(f)) => f,
+            _ => break,
         };
         if frame.is_empty() {
             continue;
