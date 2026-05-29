@@ -42,4 +42,6 @@ export const engine = {
   kick: (player: string, reason?: string) => request("POST", "/api/kick", { player, reason }),
   setblock: (x: number, y: number, z: number, block: string) =>
     request("POST", "/api/setblock", { x, y, z, block }),
+  ai: () => request("GET", "/api/ai"),
+  setAi: (body: Record<string, unknown>) => request("POST", "/api/ai", body),
 };

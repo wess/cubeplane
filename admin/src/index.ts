@@ -58,6 +58,12 @@ const routes = [
       engine.setblock(Number(body.x), Number(body.y), Number(body.z), String(body.block ?? "")),
     );
   }),
+
+  get("/api/ai", (conn) => proxy(conn, () => engine.ai())),
+  post("/api/ai", async (conn) => {
+    const body = await readJson(conn);
+    return proxy(conn, () => engine.setAi(body));
+  }),
 ];
 
 serve({ port: config.port, hostname: config.host, routes });

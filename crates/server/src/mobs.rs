@@ -15,6 +15,18 @@ use crate::entity::{Mob, MobKind};
 use crate::item;
 use crate::player::Player;
 use crate::state::Shared;
+use crate::text;
+
+/// Register an AI villager's personality and broadcast its nameplate.
+fn villager_spawned(shared: &Arc<Shared>, entity_id: i32) {
+    shared.register_villager(entity_id);
+    if shared.ai_config().enabled {
+        if let Some((name, prof)) = shared.villager_identity(entity_id) {
+            let label = text::colored(format!("{name} the {prof}"), "green");
+            shared.broadcast(cb::entity_custom_name(entity_id, &label));
+        }
+    }
+}
 
 /// Detection radius (blocks) within which a hostile mob chases a player.
 const AGGRO_RANGE: f64 = 16.0;
@@ -80,6 +92,9 @@ pub fn tick(shared: &Arc<Shared>, tick: u64, is_night: bool) {
         }
     }
     if !remove.is_empty() {
+        for id in &remove {
+            shared.remove_villager(*id);
+        }
         shared.broadcast(cb::remove_entities(&remove));
     }
 
@@ -349,6 +364,9 @@ fn try_spawn(shared: &Arc<Shared>, players: &[Player], is_night: bool) {
         (0, 0, 0),
     ));
     shared.add_mob(mob);
+    if kind.name() == "villager" {
+        villager_spawned(shared, entity_id);
+    }
 }
 
 /// Spawn a specific mob at a position (used by the /summon command and mods).
@@ -360,6 +378,9 @@ pub fn summon(shared: &Arc<Shared>, kind: MobKind, x: f64, y: f64, z: f64) {
         entity_id, mob.uuid, kind.type_id(), mob.x, mob.y, mob.z, mob.yaw, mob.pitch, mob.yaw, 0, (0, 0, 0),
     ));
     shared.add_mob(mob);
+    if kind.name() == "villager" {
+        villager_spawned(shared, entity_id);
+    }
 }
 
 /// Find the nearest living player to a point, with horizontal distance.

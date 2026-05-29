@@ -5,6 +5,7 @@
 //! players to one another, bridges the JS mod runtime and exposes the control
 //! API consumed by the Atlas admin panel.
 
+mod ai;
 mod clientbound;
 mod codec;
 mod combat;

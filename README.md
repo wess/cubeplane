@@ -67,6 +67,9 @@ workspace of focused crates that snap together.
   redstone lamps; flip a lever to switch a circuit.
 - **Vehicles** — spawn boats/minecarts, right-click to ride, jump to dismount.
 - **Villager trading** — right-click a villager to open a trade window.
+- **AI villagers (experimental)** — opt in (config or admin panel) to give
+  villagers real LLM-driven personalities via Ollama, OpenAI or Claude:
+  right-click a villager and it chats back in character for its profession.
 - **Persistence backends** — `delta` (edits over the generator) or `region`
   (full chunk columns, Anvil-style).
 - **Commands** — `/help /list /pos /tp /xp` for everyone, plus op-gated

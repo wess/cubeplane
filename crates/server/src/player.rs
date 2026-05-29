@@ -41,6 +41,8 @@ pub struct PlayerState {
     pub open_merchant: bool,
     /// Entity id of the vehicle the player is riding, if any.
     pub riding: Option<i32>,
+    /// Entity id of the AI villager the player is currently conversing with.
+    pub talking_to: Option<i32>,
 }
 
 /// Maximum player health, in half-hearts.
@@ -67,6 +69,7 @@ impl PlayerState {
             open_container: None,
             open_merchant: false,
             riding: None,
+            talking_to: None,
         }
     }
 

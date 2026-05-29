@@ -14,6 +14,7 @@ use tracing::{debug, info, warn};
 use cubeplane_mods::ModEvent;
 use cubeplane_protocol::{ProtoRead, ProtoWrite, RawPacket, PROTOCOL_VERSION};
 
+use crate::ai::{self, Turn};
 use crate::clientbound as cb;
 use crate::codec::{read_frame, write_frame, EncryptedReader, EncryptedWriter, NO_COMPRESSION};
 use crate::combat;
@@ -339,10 +340,16 @@ where
     );
 
     // Show the newcomer every mob already roaming the world.
+    let ai_on = shared.ai_config().enabled;
     for m in shared.mobs() {
         player.send(cb::spawn_entity(
             m.entity_id, m.uuid, m.kind.type_id(), m.x, m.y, m.z, m.yaw, m.pitch, m.yaw, 0, (0, 0, 0),
         ));
+        if ai_on && m.kind.name() == "villager" {
+            if let Some((name, prof)) = shared.villager_identity(m.entity_id) {
+                player.send(cb::entity_custom_name(m.entity_id, &text::colored(format!("{name} the {prof}"), "green")));
+            }
+        }
     }
     // …and every vehicle (with its rider, if any).
     for v in shared.vehicles() {
@@ -685,10 +692,16 @@ fn respawn_player(
         player.send(cb::spawn_player(p.entity_id, p.uuid, st.x, st.y, st.z, st.yaw, st.pitch));
         player.send(cb::entity_head_rotation(p.entity_id, st.yaw));
     }
+    let ai_on = shared.ai_config().enabled;
     for m in shared.mobs() {
         player.send(cb::spawn_entity(
             m.entity_id, m.uuid, m.kind.type_id(), m.x, m.y, m.z, m.yaw, m.pitch, m.yaw, 0, (0, 0, 0),
         ));
+        if ai_on && m.kind.name() == "villager" {
+            if let Some((name, prof)) = shared.villager_identity(m.entity_id) {
+                player.send(cb::entity_custom_name(m.entity_id, &text::colored(format!("{name} the {prof}"), "green")));
+            }
+        }
     }
     for v in shared.vehicles() {
         player.send(cb::spawn_entity(v.entity_id, v.uuid, v.type_id, v.x, v.y, v.z, v.yaw, 0.0, v.yaw, 0, (0, 0, 0)));
@@ -706,13 +719,114 @@ fn interact_entity(shared: &Arc<Shared>, player: &Player, target: i32) {
         shared.broadcast(cb::set_passengers(target, &[player.entity_id]));
         return;
     }
-    // Trade with a villager.
+    // Talk to (AI) or trade with a villager.
     let is_villager = shared
         .with_mob(target, |m| m.kind.name() == "villager")
         .unwrap_or(false);
     if is_villager {
-        open_merchant(shared, player);
+        if shared.ai_config().enabled {
+            start_conversation(shared, player, target);
+        } else {
+            open_merchant(shared, player);
+        }
     }
+}
+
+/// Compose a villager chat line: gold "Name (profession)" + white speech.
+fn villager_line(name: &str, profession: &str, text: &str) -> serde_json::Value {
+    serde_json::json!({
+        "text": "",
+        "extra": [
+            { "text": format!("{name} ({profession}) ", name = name, profession = profession), "color": "gold" },
+            { "text": text, "color": "white" }
+        ]
+    })
+}
+
+/// Begin a conversation with an AI villager.
+fn start_conversation(shared: &Arc<Shared>, player: &Player, villager: i32) {
+    shared.register_villager(villager);
+    player.update(|s| s.talking_to = Some(villager));
+    if let Some((name, prof)) = shared.villager_identity(villager) {
+        let greeting = format!(
+            "Hello there, {}! I'm {name}, the village {prof}. What brings you my way? (say 'bye' to part)",
+            player.name
+        );
+        player.send(cb::system_chat(&villager_line(&name, prof, &greeting), false));
+    }
+}
+
+/// Route a talking player's chat to their villager and reply asynchronously.
+fn talk_to_villager(shared: &Arc<Shared>, player: &Player, villager: i32, message: &str) {
+    // Leaving the conversation.
+    let lower = message.trim().to_lowercase();
+    if matches!(lower.as_str(), "bye" | "goodbye" | "leave" | "farewell") {
+        player.update(|s| s.talking_to = None);
+        if let Some((name, prof)) = shared.villager_identity(villager) {
+            player.send(cb::system_chat(&villager_line(&name, prof, "Safe travels, friend!"), false));
+        }
+        return;
+    }
+
+    let Some((name, prof)) = shared.villager_identity(villager) else {
+        // Villager is gone.
+        player.update(|s| s.talking_to = None);
+        player.send(cb::system_chat(&text::colored("(the villager has wandered off)", "gray"), false));
+        return;
+    };
+
+    // Single-flight: ignore new input while the model is responding.
+    // If AI was switched off mid-conversation, end gracefully.
+    if !shared.ai_config().enabled {
+        player.update(|s| s.talking_to = None);
+        player.send(cb::system_chat(&villager_line(&name, prof, "…I've nothing more to say for now."), false));
+        return;
+    }
+
+    let busy = shared.with_villager(villager, |b| b.busy).unwrap_or(true);
+    if busy {
+        player.send(cb::system_chat(&text::colored("(they're still thinking…)", "gray"), false));
+        return;
+    }
+    let history = shared
+        .with_villager(villager, |b| {
+            b.busy = true;
+            b.history.clone()
+        })
+        .unwrap_or_default();
+
+    let cfg = shared.ai_config();
+    let system = ai::system_prompt(&name, prof);
+    let shared = shared.clone();
+    let player = player.clone();
+    let user_msg = message.to_string();
+
+    tokio::spawn(async move {
+        let result = ai::chat(&cfg, &system, &history, &user_msg).await;
+        let limit = cfg.history_limit.max(1) * 2;
+        match result {
+            Ok(reply) => {
+                shared.with_villager(villager, |b| {
+                    b.history.push(Turn { role: "user", text: user_msg });
+                    b.history.push(Turn { role: "assistant", text: reply.clone() });
+                    if b.history.len() > limit {
+                        let drop = b.history.len() - limit;
+                        b.history.drain(0..drop);
+                    }
+                    b.busy = false;
+                });
+                player.send(cb::system_chat(&villager_line(&name, prof, &reply), false));
+            }
+            Err(e) => {
+                shared.with_villager(villager, |b| b.busy = false);
+                tracing::warn!("villager AI error: {e}");
+                player.send(cb::system_chat(
+                    &villager_line(&name, prof, "…hm, I've lost my train of thought."),
+                    false,
+                ));
+            }
+        }
+    });
 }
 
 /// Open a villager trade window with a couple of sample offers.
@@ -937,6 +1051,12 @@ fn try_eat(player: &Player) {
 }
 
 fn handle_chat(shared: &Arc<Shared>, player: &Player, message: &str) {
+    // If the player is conversing with a villager, route there instead of
+    // broadcasting to the whole server.
+    if let Some(villager) = player.state().talking_to {
+        talk_to_villager(shared, player, villager, message);
+        return;
+    }
     let line = text::chat_line(&player.name, message);
     shared.broadcast(cb::system_chat(&line, false));
     info!(player = %player.name, "{message}");

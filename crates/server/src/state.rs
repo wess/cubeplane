@@ -11,13 +11,23 @@ use bytes::BytesMut;
 use cubeplane_mods::ModRuntime;
 use cubeplane_world::World;
 
-use crate::config::Config;
+use crate::ai::Turn;
+use crate::config::{AiConfig, Config};
 use crate::entity::{ItemEntity, Mob, Projectile, Vehicle};
 use crate::item::ItemStack;
 use crate::player::Player;
 
 /// Number of slots in a chest container.
 pub const CONTAINER_SIZE: usize = 27;
+
+/// The personality and running conversation of an AI villager.
+pub struct VillagerBrain {
+    pub profession: &'static str,
+    pub name: String,
+    pub history: Vec<Turn>,
+    /// True while a request to the model is in flight (single-flight).
+    pub busy: bool,
+}
 
 /// Shared server state.
 pub struct Shared {
@@ -39,6 +49,10 @@ pub struct Shared {
     pub mods: Option<ModRuntime>,
     /// RSA keypair for online-mode encryption (present only when enabled).
     pub server_key: Option<Arc<crate::encryption::ServerKey>>,
+    /// Live, runtime-editable AI villager configuration.
+    ai: RwLock<AiConfig>,
+    /// Per-villager personalities and conversations.
+    villagers: RwLock<HashMap<i32, VillagerBrain>>,
     started: Instant,
 }
 
@@ -49,6 +63,7 @@ impl Shared {
         mods: Option<ModRuntime>,
         server_key: Option<Arc<crate::encryption::ServerKey>>,
     ) -> Arc<Shared> {
+        let config_ai = config.ai.clone();
         Arc::new(Shared {
             config,
             world: Mutex::new(world),
@@ -62,6 +77,8 @@ impl Shared {
             next_entity_id: AtomicI32::new(1),
             total_joins: AtomicU64::new(0),
             world_time: std::sync::atomic::AtomicI64::new(1000),
+            ai: RwLock::new(config_ai),
+            villagers: RwLock::new(HashMap::new()),
             mods,
             server_key,
             started: Instant::now(),
@@ -264,6 +281,46 @@ impl Shared {
                 p.send(payload.clone());
             }
         }
+    }
+
+    /// Current AI configuration snapshot.
+    pub fn ai_config(&self) -> AiConfig {
+        self.ai.read().unwrap().clone()
+    }
+
+    /// Replace the live AI configuration (e.g. from the admin panel).
+    pub fn set_ai_config(&self, cfg: AiConfig) {
+        *self.ai.write().unwrap() = cfg;
+    }
+
+    /// Register a villager's personality if not already known.
+    pub fn register_villager(&self, entity_id: i32) {
+        let mut v = self.villagers.write().unwrap();
+        v.entry(entity_id).or_insert_with(|| VillagerBrain {
+            profession: crate::ai::profession_for(entity_id),
+            name: crate::ai::name_for(entity_id),
+            history: Vec::new(),
+            busy: false,
+        });
+    }
+
+    /// Forget a villager (when it dies/despawns).
+    pub fn remove_villager(&self, entity_id: i32) {
+        self.villagers.write().unwrap().remove(&entity_id);
+    }
+
+    /// A villager's display name and profession, if registered.
+    pub fn villager_identity(&self, entity_id: i32) -> Option<(String, &'static str)> {
+        self.villagers
+            .read()
+            .unwrap()
+            .get(&entity_id)
+            .map(|b| (b.name.clone(), b.profession))
+    }
+
+    /// Mutate a villager's brain.
+    pub fn with_villager<R>(&self, entity_id: i32, f: impl FnOnce(&mut VillagerBrain) -> R) -> Option<R> {
+        self.villagers.write().unwrap().get_mut(&entity_id).map(f)
     }
 
     /// Fire an event into the mod runtime, if mods are enabled.

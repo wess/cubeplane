@@ -52,6 +52,7 @@ pub async fn serve(shared: Arc<Shared>) -> anyhow::Result<()> {
         .route("/api/say", post(say))
         .route("/api/kick", post(kick))
         .route("/api/setblock", post(setblock))
+        .route("/api/ai", get(get_ai).post(set_ai))
         .route("/ws", get(ws_upgrade))
         .with_state(state);
 
@@ -201,6 +202,76 @@ async fn setblock(
         )
             .into_response(),
     }
+}
+
+async fn get_ai(State(ctrl): State<Control>, headers: HeaderMap) -> impl IntoResponse {
+    if !authorized(&ctrl, &headers) {
+        return unauthorized();
+    }
+    let cfg = ctrl.shared.ai_config();
+    // Never echo the secret back to the browser.
+    Json(json!({
+        "enabled": cfg.enabled,
+        "provider": cfg.provider,
+        "model": cfg.model,
+        "baseUrl": cfg.base_url,
+        "maxTokens": cfg.max_tokens,
+        "temperature": cfg.temperature,
+        "hasKey": !cfg.api_key.is_empty(),
+    }))
+    .into_response()
+}
+
+#[derive(Deserialize)]
+struct AiBody {
+    enabled: Option<bool>,
+    provider: Option<String>,
+    model: Option<String>,
+    #[serde(rename = "apiKey")]
+    api_key: Option<String>,
+    #[serde(rename = "baseUrl")]
+    base_url: Option<String>,
+    #[serde(rename = "maxTokens")]
+    max_tokens: Option<u32>,
+    temperature: Option<f32>,
+}
+
+async fn set_ai(
+    State(ctrl): State<Control>,
+    headers: HeaderMap,
+    Json(body): Json<AiBody>,
+) -> impl IntoResponse {
+    if !authorized(&ctrl, &headers) {
+        return unauthorized();
+    }
+    let mut cfg = ctrl.shared.ai_config();
+    if let Some(v) = body.enabled {
+        cfg.enabled = v;
+    }
+    if let Some(v) = body.provider {
+        cfg.provider = v;
+    }
+    if let Some(v) = body.model {
+        cfg.model = v;
+    }
+    if let Some(v) = body.base_url {
+        cfg.base_url = v;
+    }
+    if let Some(v) = body.max_tokens {
+        cfg.max_tokens = v;
+    }
+    if let Some(v) = body.temperature {
+        cfg.temperature = v;
+    }
+    // Only overwrite the key if a non-empty one was supplied.
+    if let Some(k) = body.api_key {
+        if !k.is_empty() {
+            cfg.api_key = k;
+        }
+    }
+    ctrl.shared.set_ai_config(cfg);
+    info!(target: "cubeplane::control", "AI config updated");
+    Json(json!({ "ok": true })).into_response()
 }
 
 fn unauthorized() -> axum::response::Response {

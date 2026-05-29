@@ -12,6 +12,57 @@ pub struct Config {
     pub world: WorldConfig,
     pub mods: ModsConfig,
     pub control: ControlConfig,
+    pub ai: AiConfig,
+}
+
+/// Configuration for the experimental LLM-backed villager feature.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AiConfig {
+    /// Master toggle. When off, villagers fall back to ordinary trading.
+    pub enabled: bool,
+    /// "ollama", "openai" or "claude".
+    pub provider: String,
+    /// Model name (e.g. "llama3.2", "gpt-4o-mini", "claude-sonnet-4-6").
+    pub model: String,
+    /// API key / token (not needed for local Ollama).
+    pub api_key: String,
+    /// Override base URL; empty uses the provider default.
+    pub base_url: String,
+    /// Cap on reply length.
+    pub max_tokens: u32,
+    /// How many prior turns to keep as context.
+    pub history_limit: usize,
+    pub temperature: f32,
+}
+
+impl Default for AiConfig {
+    fn default() -> Self {
+        AiConfig {
+            enabled: false,
+            provider: "ollama".into(),
+            model: "llama3.2".into(),
+            api_key: String::new(),
+            base_url: String::new(),
+            max_tokens: 200,
+            history_limit: 6,
+            temperature: 0.8,
+        }
+    }
+}
+
+impl AiConfig {
+    /// The base URL to use, applying the provider default when unset.
+    pub fn effective_base_url(&self) -> String {
+        if !self.base_url.is_empty() {
+            return self.base_url.trim_end_matches('/').to_string();
+        }
+        match self.provider.as_str() {
+            "openai" => "https://api.openai.com".into(),
+            "claude" => "https://api.anthropic.com".into(),
+            _ => "http://localhost:11434".into(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

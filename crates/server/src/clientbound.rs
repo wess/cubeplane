@@ -496,6 +496,22 @@ pub fn set_slot(window_id: i8, state_id: i32, slot: i16, item: ItemStack) -> Byt
     b
 }
 
+/// Give an entity a visible custom name (floating nameplate). Uses metadata
+/// index 2 (optional chat component) + index 3 (name visible bool).
+pub fn entity_custom_name(entity_id: i32, name: &Json) -> BytesMut {
+    let mut b = pkt(play_cb::ENTITY_METADATA);
+    b.write_varint(entity_id);
+    b.write_u8(2); // index 2 = custom name
+    b.write_varint(6); // type 6 = optional chat component
+    b.write_bool(true); // present
+    b.write_string(&name.to_string());
+    b.write_u8(3); // index 3 = custom name visible
+    b.write_varint(8); // type 8 = boolean
+    b.write_bool(true);
+    b.write_u8(0xff); // end
+    b
+}
+
 /// Set the entity's `Item` metadata so an item entity renders its stack.
 pub fn entity_metadata_item(entity_id: i32, stack: ItemStack) -> BytesMut {
     let mut b = pkt(play_cb::ENTITY_METADATA);

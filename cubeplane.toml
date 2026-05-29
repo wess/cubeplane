@@ -45,3 +45,16 @@ host = "127.0.0.1"
 port = 8080
 # Uncomment to require `Authorization: Bearer <token>` on the control API.
 # token = "change-me"
+
+[ai]
+# Experimental: give villagers real, in-character AI. Right-click a villager
+# in-game to chat; it replies according to its profession. Configure here or
+# live from the Atlas admin panel (no restart needed). Default: off.
+enabled = false
+provider = "ollama"   # ollama | openai | claude
+model = "llama3.2"
+# api_key = ""        # required for openai / claude
+# base_url = ""       # override endpoint; empty = provider default
+max_tokens = 200
+history_limit = 6
+temperature = 0.8

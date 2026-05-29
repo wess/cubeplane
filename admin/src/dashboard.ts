@@ -81,6 +81,24 @@ export const dashboard = (): string => /* html */ `<!doctype html>
   </div>
 
   <div class="card">
+    <h2>AI villagers <span id="aiState" class="tag">…</span></h2>
+    <p class="muted" style="margin-top:0">Right-click a villager in-game to chat; it replies in character for its role.</p>
+    <form class="row" id="aiForm">
+      <label class="muted"><input type="checkbox" id="aiEnabled" /> enabled</label>
+      <select id="aiProvider">
+        <option value="ollama">Ollama</option>
+        <option value="openai">OpenAI</option>
+        <option value="claude">Claude</option>
+      </select>
+      <input id="aiModel" placeholder="model (e.g. llama3.2)" />
+      <input id="aiBaseUrl" placeholder="base URL (optional)" />
+      <input id="aiKey" type="password" placeholder="API key (leave blank to keep)" autocomplete="off" />
+      <button type="submit">Save</button>
+    </form>
+    <div id="aiMsg" class="muted" style="margin-top:8px"></div>
+  </div>
+
+  <div class="card">
     <h2>Set block</h2>
     <form class="row" id="blockForm">
       <input id="bx" type="number" placeholder="x" value="0" />
@@ -156,8 +174,48 @@ $("blockForm").addEventListener("submit", async (e) => {
   $("blockMsg").textContent = res.ok ? "Placed " + body.block + "." : ("Error: " + (data.error || res.status));
 });
 
+let aiEdited = false;
+["aiEnabled", "aiProvider", "aiModel", "aiBaseUrl", "aiKey"].forEach((id) => {
+  $(id).addEventListener("input", () => { aiEdited = true; });
+});
+
+async function refreshAi() {
+  try {
+    const ai = await fetch("/api/ai").then((r) => r.json());
+    $("aiState").textContent = ai.enabled ? "on · " + ai.provider : "off";
+    if (!aiEdited) {
+      $("aiEnabled").checked = !!ai.enabled;
+      $("aiProvider").value = ai.provider || "ollama";
+      $("aiModel").value = ai.model || "";
+      $("aiBaseUrl").value = ai.baseUrl || "";
+      $("aiKey").placeholder = ai.hasKey ? "API key set — blank keeps it" : "API key";
+    }
+  } catch (e) {
+    $("aiState").textContent = "?";
+  }
+}
+
+$("aiForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const body = {
+    enabled: $("aiEnabled").checked,
+    provider: $("aiProvider").value,
+    model: $("aiModel").value.trim(),
+    baseUrl: $("aiBaseUrl").value.trim(),
+    apiKey: $("aiKey").value,
+  };
+  const res = await fetch("/api/ai", { method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify(body) });
+  $("aiMsg").textContent = res.ok ? "Saved." : "Error saving.";
+  $("aiKey").value = "";
+  aiEdited = false;
+  refreshAi();
+});
+
 refresh();
+refreshAi();
 setInterval(refresh, 2000);
+setInterval(refreshAi, 5000);
 </script>
 </body>
 </html>`;
