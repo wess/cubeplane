@@ -45,9 +45,18 @@ workspace of focused crates that snap together.
   regeneration.
 - **Death & respawn** — fall and void damage, the death screen, and a full
   respawn that rebuilds the player's world view.
-- **Building** — break and place blocks from a 9-slot hotbar, with proper
-  block-change acknowledgement.
-- **Chat & commands** — `/help`, `/list`, `/pos`, `/tp`, plus any mod commands.
+- **Items & inventory** — a real 46-slot inventory, stacks, creative item
+  edits, drops on the ground with pickup, food you can eat, weapons whose
+  damage matters, and armor that reduces it.
+- **Survival** — health, hunger drain, fall/void/explosion/arrow damage,
+  natural regeneration, XP from kills, death drops (or `keepInventory`).
+- **Persistence** — block edits and player data (position, vitals, inventory,
+  XP) are saved to disk and restored across restarts.
+- **Building** — break and place blocks from your hotbar with proper
+  block-change acknowledgement; survival breaks drop items.
+- **Commands** — `/help /list /pos /tp /xp` for everyone, plus op-gated
+  `/gamemode /give /time /weather /summon /effect /heal /kill /clear`, with
+  client-side tab-completion and any mod commands.
 - **JavaScript mods** — a sandboxed QuickJS runtime with an event/action API.
 - **Control API** — HTTP + WebSocket endpoints for status, players, broadcast,
   kick and set-block.

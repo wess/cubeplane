@@ -12,11 +12,20 @@ view_distance = 8
 compression_threshold = 256
 # One of: survival, creative, adventure, spectator.
 gamemode = "creative"
+# Operator names allowed to run cheat commands. Empty = everyone is an op.
+ops = []
 
 [world]
 # One of: terrain (value-noise hills) or flat (superflat).
 generator = "terrain"
 seed = 24317
+# Persist block edits and player data to disk.
+save = true
+save_dir = "world_data"
+# Keep a player's items when they die.
+keep_inventory = false
+# Spawn hostile mobs at night (otherwise only passive animals appear).
+spawn_hostiles = true
 
 [mods]
 enabled = true

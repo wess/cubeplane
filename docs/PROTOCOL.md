@@ -95,6 +95,16 @@ separate Configuration phase arrives in 1.20.2). cubeplane runs in offline mode
 | `0x31` | Use Item On (place) |
 | `0x32` | Use Item |
 
+## Gameplay packets
+
+Items, survival and ops add these clientbound packets: Spawn Entity
+(`0x01`, items/arrows), Spawn Experience Orb (`0x02`), Declare Commands
+(`0x10`), Set Container Content (`0x12`), Set Container Slot (`0x14`),
+Explosion (`0x1d`), Entity Metadata (`0x52`), Set Experience (`0x56`),
+Collect Item (`0x67`), Entity Effect (`0x6c`), plus Tab List Header (`0x65`).
+Serverbound: Click Window (`0x0b`), Interact Entity (`0x10`), Set Creative Slot
+(`0x2b`) and Use Item (`0x32`).
+
 ## Chunk format notes
 
 - Columns are 24 sections tall (`min_y = -64`, `height = 384`).

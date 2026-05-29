@@ -96,6 +96,15 @@ impl World {
         self.chunks.contains_key(&(cx, cz))
     }
 
+    /// Drop every loaded chunk not in `keep` from memory, returning the number
+    /// unloaded. Edits persist in the edit map, so unloaded chunks regenerate
+    /// identically on demand.
+    pub fn retain_chunks(&mut self, keep: &std::collections::HashSet<(i32, i32)>) -> usize {
+        let before = self.chunks.len();
+        self.chunks.retain(|coord, _| keep.contains(coord));
+        before - self.chunks.len()
+    }
+
     /// Read a block at world coordinates, generating the chunk if needed.
     pub fn get_block(&mut self, x: i32, y: i32, z: i32) -> StateId {
         let (cx, cz, lx, lz) = world_to_chunk(x, z);

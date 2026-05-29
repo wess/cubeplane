@@ -61,11 +61,18 @@ The engine proper:
 - `connection`: the per-connection handshake → status/login → play lifecycle,
   chunk streaming, movement relay, chat, commands, building, combat, fall/void
   damage and respawn.
-- `entity`: mob kinds (type ids, stats, hostility) and live `Mob` state.
-- `mobs`: spawning plus the AI tick — gravity, wandering, hostile chasing and
-  melee, knockback, death animations and despawning.
-- `combat`: shared damage/heal/death helpers used by fall damage, mob melee and
-  regeneration.
+- `entity`: mob kinds (type ids, stats, hostility), `Mob`, dropped `ItemEntity`
+  and `Projectile` state.
+- `mobs`: spawning (night-gated hostiles) plus the AI tick — gravity,
+  wandering, hostile chasing, melee, creeper explosions, skeleton arrows, loot
+  drops, XP and despawning.
+- `combat`: shared damage/heal/death/XP/hunger helpers used by fall, mob,
+  projectile and explosion damage, with armor mitigation and death drops.
+- `item` / `inventory`: the 1.20.1 item registry and the 46-slot player
+  inventory (stacks, armor, add/merge).
+- `drops`: dropped-item and projectile physics, pickup and hit detection.
+- `commands`: built-in and op-gated slash commands.
+- `persistence`: world block-edit delta and per-player JSON save/load.
 - `state`: the `Arc<Shared>` everything hangs off — config, world, player
   table, mob table, broadcast helpers, the mod bridge.
 - `control`: the HTTP + WebSocket admin API (axum).

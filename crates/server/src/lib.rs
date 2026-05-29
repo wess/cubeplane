@@ -145,11 +145,40 @@ async fn game_loop(shared: Arc<Shared>) {
             combat::regenerate(&shared);
         }
 
+        // Hunger drain every 30 seconds.
+        if ticks.is_multiple_of(600) {
+            combat::hunger_tick(&shared);
+        }
+
+        // Evict far-away chunks from memory every 30 seconds.
+        if ticks.is_multiple_of(600) {
+            evict_chunks(&shared);
+        }
+
         // Keep-alive and world time every 10 seconds.
         if ticks.is_multiple_of(200) {
             shared.broadcast(clientbound::keep_alive(ticks as i64));
             shared.broadcast(clientbound::update_time(ticks as i64, time_of_day));
         }
+    }
+}
+
+/// Drop chunks no player is near, bounding the world's memory use.
+fn evict_chunks(shared: &Arc<Shared>) {
+    use std::collections::HashSet;
+    let r = shared.config.server.view_distance + 2;
+    let mut keep: HashSet<(i32, i32)> = HashSet::new();
+    for p in shared.players() {
+        let (cx, cz) = p.state().chunk();
+        for dz in -r..=r {
+            for dx in -r..=r {
+                keep.insert((cx + dx, cz + dz));
+            }
+        }
+    }
+    let removed = shared.world.lock().unwrap().retain_chunks(&keep);
+    if removed > 0 {
+        tracing::debug!("evicted {removed} idle chunks");
     }
 }
 

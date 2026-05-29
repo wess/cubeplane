@@ -71,6 +71,29 @@ pub fn damage_player(shared: &Arc<Shared>, player: &Player, amount: f32, cause: 
     }
 }
 
+/// Periodic hunger drain for survival players: burn saturation, then food,
+/// then starve. Called every ~30 seconds from the game loop.
+pub fn hunger_tick(shared: &Arc<Shared>) {
+    for player in shared.players() {
+        if player.is_dead() || player.gamemode() == 1 {
+            continue;
+        }
+        let (health, food, saturation, starving) = player.update(|s| {
+            if s.saturation > 0.0 {
+                s.saturation = (s.saturation - 1.0).max(0.0);
+            } else if s.food > 0 {
+                s.food -= 1;
+            }
+            (s.health, s.food, s.saturation, s.food == 0)
+        });
+        player.send(cb::update_health(health, food, saturation));
+        // Starvation damages down to (but not below) one heart.
+        if starving && health > 2.0 {
+            damage_player(shared, &player, 1.0, "starved to death");
+        }
+    }
+}
+
 /// Grant experience and update the XP HUD. Levels use a simple linear curve.
 pub fn grant_xp(player: &Player, amount: i32) {
     let total = player.update(|s| {

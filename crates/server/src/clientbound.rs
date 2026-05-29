@@ -557,6 +557,31 @@ pub fn particle(particle_id: i32, x: f64, y: f64, z: f64, spread: f32, count: i3
     b
 }
 
+/// Declare the available commands as a flat graph so the client offers
+/// tab-completion and colours known commands. Each name becomes an executable
+/// literal child of the root node.
+pub fn declare_commands(names: &[&str]) -> BytesMut {
+    let mut b = pkt(play_cb::DECLARE_COMMANDS);
+    b.write_varint((names.len() + 1) as i32); // node count (root + literals)
+
+    // Node 0: root (type 0, no command), children = all literal nodes.
+    b.write_u8(0x00);
+    b.write_varint(names.len() as i32);
+    for i in 0..names.len() {
+        b.write_varint((i + 1) as i32);
+    }
+
+    // Literal, executable nodes.
+    for name in names {
+        b.write_u8(0x05); // type=literal(1) | has_command(0x04)
+        b.write_varint(0); // no children
+        b.write_string(name);
+    }
+
+    b.write_varint(0); // root index
+    b
+}
+
 /// Set the tab list header and footer (JSON text components).
 pub fn tab_list_header(header: &Json, footer: &Json) -> BytesMut {
     let mut b = pkt(play_cb::TAB_LIST_HEADER);

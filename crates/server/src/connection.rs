@@ -194,6 +194,10 @@ async fn play(
         player.send(cb::set_experience(combat::xp_bar(s.xp_total), s.xp_total / 10, s.xp_total));
     }
     player.sync_inventory();
+    player.send(cb::declare_commands(&[
+        "help", "list", "pos", "tp", "gamemode", "give", "time", "weather", "summon", "effect",
+        "heal", "kill", "clear", "xp",
+    ]));
     player.send(cb::tab_list_header(
         &text::colored("cubeplane", "gold"),
         &text::colored("Rust engine · JS mods", "gray"),
