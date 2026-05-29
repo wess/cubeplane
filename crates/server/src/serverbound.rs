@@ -8,8 +8,10 @@ use cubeplane_protocol::{ProtoRead, RawPacket, Result};
 
 use crate::ids::play_sb;
 
-/// A decoded, actionable serverbound play packet.
+/// A decoded, actionable serverbound play packet. Some fields are parsed for
+/// completeness/documentation even where the engine does not yet act on them.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub enum Play {
     TeleportConfirm { id: i32 },
     KeepAlive { id: i64 },

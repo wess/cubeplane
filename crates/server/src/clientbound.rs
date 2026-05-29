@@ -11,7 +11,7 @@ use uuid::Uuid;
 use cubeplane_protocol::ProtoWrite;
 use cubeplane_world::chunk::{self, Chunk};
 
-use crate::ids::{login_cb, play_cb};
+use crate::ids::{login_cb, play_cb, status_cb};
 use crate::registry;
 
 /// Start a payload buffer with the given packet id.
@@ -19,6 +19,22 @@ fn pkt(id: i32) -> BytesMut {
     let mut buf = BytesMut::new();
     buf.write_varint(id);
     buf
+}
+
+// ---------------------------------------------------------------------------
+// Status state
+// ---------------------------------------------------------------------------
+
+pub fn status_response(json: &str) -> BytesMut {
+    let mut b = pkt(status_cb::SERVER_INFO);
+    b.write_string(json);
+    b
+}
+
+pub fn status_pong(payload: i64) -> BytesMut {
+    let mut b = pkt(status_cb::PONG);
+    b.write_i64(payload);
+    b
 }
 
 // ---------------------------------------------------------------------------
@@ -156,6 +172,13 @@ pub fn chunk_data(c: &Chunk) -> BytesMut {
         b.write_varint(array.len() as i32);
         b.write_bytes(array);
     }
+    b
+}
+
+pub fn unload_chunk(cx: i32, cz: i32) -> BytesMut {
+    let mut b = pkt(play_cb::UNLOAD_CHUNK);
+    b.write_i32(cx);
+    b.write_i32(cz);
     b
 }
 

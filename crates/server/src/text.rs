@@ -32,11 +32,6 @@ pub fn system_notice(message: impl Into<String>) -> Value {
     colored(message, "yellow")
 }
 
-/// Serialize a component to the compact JSON string sent on the wire.
-pub fn to_string(value: &Value) -> String {
-    value.to_string()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -45,6 +40,6 @@ mod tests {
     fn chat_line_shape() {
         let v = chat_line("wess", "hello");
         assert_eq!(v["extra"][0]["text"], "<wess> ");
-        assert!(to_string(&v).contains("hello"));
+        assert!(v.to_string().contains("hello"));
     }
 }

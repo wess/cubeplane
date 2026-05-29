@@ -2,6 +2,10 @@
 //!
 //! Values were extracted from the PrismarineJS `minecraft-data` protocol
 //! definition for `pc/1.20`. Ids are state- and direction-relative.
+//!
+//! This is a reference table; not every id is wired up yet, so unused
+//! constants are expected.
+#![allow(dead_code)]
 
 /// Handshaking, serverbound.
 pub mod handshake_sb {
@@ -38,6 +42,7 @@ pub mod play_cb {
     pub const ACKNOWLEDGE_BLOCK_CHANGE: i32 = 0x06;
     pub const BLOCK_UPDATE: i32 = 0x0a;
     pub const DISCONNECT: i32 = 0x1a;
+    pub const UNLOAD_CHUNK: i32 = 0x1e;
     pub const GAME_EVENT: i32 = 0x1f;
     pub const KEEP_ALIVE: i32 = 0x23;
     pub const CHUNK_DATA: i32 = 0x24;
