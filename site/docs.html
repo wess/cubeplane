@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Documentation — cubeplane</title>
+    <meta name="description" content="Documentation for cubeplane: architecture, the QuickJS modding API, the wire protocol, multi-version support (1.18–1.20.4), and AI villagers." />
+    <link rel="stylesheet" href="styles.css" />
+    <style>:root{--accent:#5fc46b;--accent2:#3aa0d8}</style>
+  </head>
+  <body>
+    <nav class="nav">
+      <div class="wrap">
+        <a class="brand" href="index.html"><span class="mark">⬛</span> cubeplane</a>
+        <button class="navtoggle" aria-label="Menu" data-nav>☰</button>
+        <div class="navlinks" data-navlinks>
+          <a href="index.html#features">Features</a>
+          <a href="index.html#architecture">Architecture</a>
+          <a href="docs.html">Docs</a>
+          <a class="btn primary" href="https://github.com/wess/cubeplane">GitHub</a>
+        </div>
+      </div>
+    </nav>
+
+    <header class="dochero">
+      <div class="wrap">
+        <div class="eyebrow">Documentation</div>
+        <h2 style="font-size: clamp(28px, 5vw, 40px); font-weight: 800; letter-spacing: -0.02em">Everything about cubeplane.</h2>
+        <p class="sub">
+          The reference lives as Markdown in the <code>docs/</code> folder. Start with the architecture, then dig into
+          the modding API, the wire protocol, and multi-version support. Each card links straight to the source document.
+        </p>
+      </div>
+    </header>
+
+    <main class="wrap">
+      <div class="docsection">Understand it</div>
+      <div class="docgrid">
+        <a class="doccard" href="../docs/ARCHITECTURE.md">
+          <div class="t"><span class="ico">🏗️</span> Architecture</div>
+          <p>The three layers and the Cargo workspace of crates: protocol, nbt, world, mods, server, and the binary.</p>
+        </a>
+        <a class="doccard" href="../README.md">
+          <div class="t"><span class="ico">📖</span> Readme</div>
+          <p>What cubeplane is, the full feature list, quick start, configuration, and the workspace layout.</p>
+        </a>
+        <a class="doccard" href="../cubeplane.toml">
+          <div class="t"><span class="ico">⚙️</span> Configuration</div>
+          <p>Every setting in <code>cubeplane.toml</code>: server, world, mods, and the control API — all optional.</p>
+        </a>
+      </div>
+
+      <div class="docsection">Extend it</div>
+      <div class="docgrid">
+        <a class="doccard" href="../docs/MODDING.md">
+          <div class="t"><span class="ico">📜</span> Modding</div>
+          <p>The QuickJS mod runtime: the event and action API, registering handlers, and adding commands.</p>
+        </a>
+        <a class="doccard" href="../docs/AI_VILLAGERS.md">
+          <div class="t"><span class="ico">🧑‍🌾</span> AI villagers</div>
+          <p>Opt-in LLM personalities for villagers via Ollama, OpenAI, or Claude — config and the admin panel toggle.</p>
+        </a>
+      </div>
+
+      <div class="docsection">Protocol & versions</div>
+      <div class="docgrid">
+        <a class="doccard" href="../docs/PROTOCOL.md">
+          <div class="t"><span class="ico">🔌</span> Protocol</div>
+          <p>VarInt and packet framing, the handshake, login, configuration, and play phases on protocol 763.</p>
+        </a>
+        <a class="doccard" href="../docs/MULTIVERSION.md">
+          <div class="t"><span class="ico">🔁</span> Multi-version</div>
+          <p>The bidirectional translation engine that serves nine protocol versions across MC 1.18–1.20.4.</p>
+        </a>
+      </div>
+
+      <div class="docsection">Source</div>
+      <div class="docgrid">
+        <a class="doccard" href="https://github.com/wess/cubeplane">
+          <div class="t"><span class="ico">🐙</span> GitHub</div>
+          <p>Browse the full source: crates, example mods, the Atlas admin panel, and the docs.</p>
+        </a>
+        <a class="doccard" href="https://github.com/wess/cubeplane/issues">
+          <div class="t"><span class="ico">🐛</span> Issues</div>
+          <p>Report a bug, request a version, or follow progress toward fuller ecosystem parity.</p>
+        </a>
+      </div>
+    </main>
+
+    <footer style="margin-top: 60px">
+      <div class="wrap">
+        <a class="brand" href="index.html"><span class="mark">⬛</span> cubeplane</a>
+        <div class="links">
+          <a href="index.html">Home</a>
+          <a href="../README.md">Readme</a>
+          <a href="../docs/ARCHITECTURE.md">Architecture</a>
+          <a href="https://github.com/wess/cubeplane">GitHub</a>
+        </div>
+        <span>MIT · © wess</span>
+      </div>
+    </footer>
+
+    <script src="app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,253 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>cubeplane — a Minecraft server engine in Rust</title>
+    <meta
+      name="description"
+      content="cubeplane is a from-scratch Minecraft Java server engine in Rust (Tokio) for 1.20.1 / protocol 763 — with drop-in JavaScript mods via QuickJS and an Atlas web admin panel. Multi-version support 1.18–1.20.4."
+    />
+    <link rel="stylesheet" href="styles.css" />
+    <style>:root{--accent:#5fc46b;--accent2:#3aa0d8}</style>
+  </head>
+  <body>
+    <!-- nav -->
+    <nav class="nav">
+      <div class="wrap">
+        <a class="brand" href="index.html"><span class="mark">⬛</span> cubeplane</a>
+        <button class="navtoggle" aria-label="Menu" data-nav>☰</button>
+        <div class="navlinks" data-navlinks>
+          <a href="#features">Features</a>
+          <a href="#architecture">Architecture</a>
+          <a href="docs.html">Docs</a>
+          <a class="btn primary" href="https://github.com/wess/cubeplane">GitHub</a>
+        </div>
+      </div>
+    </nav>
+
+    <!-- hero -->
+    <header class="hero">
+      <div class="wrap">
+        <span class="pill"><span class="dot"></span> Minecraft Java 1.20.1 · protocol 763 · Rust + Tokio</span>
+        <h1>A Minecraft server engine <span class="accent">written from scratch in Rust</span>.</h1>
+        <p class="lead">
+          cubeplane is a real Minecraft Java server in three clean layers: a Rust engine for protocol, world, and
+          gameplay; drop-in JavaScript mods running on QuickJS; and an Atlas web admin panel that drives the
+          control API. A vanilla 1.20.1 client connects and walks around a lit, generated world.
+        </p>
+        <div class="cta">
+          <a class="btn primary" href="#start">Get started</a>
+          <a class="btn ghost" href="https://github.com/wess/cubeplane">View on GitHub →</a>
+        </div>
+
+        <!-- mockup -->
+        <div class="mock">
+          <div class="bar">
+            <span class="hash">#</span><span>cubeplane</span>
+            <span class="muted" style="font-size: 13px">· 0.0.0.0:25565 · protocol 763</span>
+            <span class="dots"><i></i><i></i><i></i></span>
+          </div>
+          <div class="body">
+            <div class="msg">
+              <div class="av" style="background: linear-gradient(135deg, #5fc46b, #2f8f3c)">⬛</div>
+              <div>
+                <div class="who">engine <small>Rust · Tokio</small></div>
+                <div class="txt">cubeplane listening on 0.0.0.0:25565 — Minecraft 1.20.1 (protocol 763)</div>
+              </div>
+            </div>
+            <div class="msg">
+              <div class="av" style="background: linear-gradient(135deg, #5fc46b, #2f8f3c)">⬛</div>
+              <div>
+                <div class="who">control API <small>HTTP + WebSocket</small></div>
+                <div class="txt">control API listening on http://127.0.0.1:8080</div>
+              </div>
+            </div>
+            <div class="msg">
+              <div class="av">📜</div>
+              <div>
+                <div class="who">mods <small>QuickJS</small></div>
+                <div class="txt">loaded welcome.js, tower.js — handlers registered for player_join</div>
+              </div>
+            </div>
+            <div class="msg human">
+              <div class="av">🧑</div>
+              <div>
+                <div class="who">player</div>
+                <div class="txt">joined the cubeplane! <span class="men">/tower</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <!-- features -->
+    <section class="block" id="features">
+      <div class="wrap">
+        <div class="eyebrow">Features</div>
+        <h2>A feature-complete 1.20.1 survival server.</h2>
+        <p class="sub">Built as a Cargo workspace of focused crates that snap together — protocol, world, mods, server.</p>
+        <div class="grid">
+          <div class="card">
+            <div class="ico">🎮</div>
+            <h3>Real client compatibility</h3>
+            <p>A vanilla 1.20.1 client connects, logs in, and walks around a lit, generated world. Server List Ping shows a live MOTD and player count.</p>
+          </div>
+          <div class="card">
+            <div class="ico">🔐</div>
+            <h3>Login & encryption</h3>
+            <p>Offline-mode UUIDs, packet compression, and optional online-mode encryption with RSA key exchange and an AES-CFB8 stream.</p>
+          </div>
+          <div class="card">
+            <div class="ico">🌍</div>
+            <h3>World generation & lighting</h3>
+            <p>Superflat or smooth value-noise terrain with paletted chunk sections and heightmaps, plus real skylight and block-light flood-fill.</p>
+          </div>
+          <div class="card">
+            <div class="ico">🧱</div>
+            <h3>Full block registry</h3>
+            <p>All 1003 of 1.20.1's blocks resolvable by name for <code>/setblock</code>, <code>/give</code>, and mods, with correct light opacity and emission.</p>
+          </div>
+          <div class="card">
+            <div class="ico">👾</div>
+            <h3>Mobs, AI & combat</h3>
+            <p>~80 living entity types spawn, wander with gravity, and hostiles chase, melee, shoot arrows or explode. Health/food HUD, knockback, death and respawn.</p>
+          </div>
+          <div class="card">
+            <div class="ico">🎒</div>
+            <h3>Items, survival & crafting</h3>
+            <p>A real 46-slot inventory, drops and pickup, hunger drain, XP, a recipe engine for <code>/craft</code> and the grid, plus working furnaces.</p>
+          </div>
+          <div class="card">
+            <div class="ico">🔴</div>
+            <h3>World simulation & redstone</h3>
+            <p>Crops grow, trees and grass spread, water and lava flow, fire burns out — and full redstone: wire, repeaters, comparators, observers, and pistons.</p>
+          </div>
+          <div class="card">
+            <div class="ico">💾</div>
+            <h3>Persistence backends</h3>
+            <p>Choose <code>delta</code> (edits over the generator) or <code>region</code> (Anvil-style columns). Chests, signs, players, mobs, vehicles, and the clock all persist.</p>
+          </div>
+          <div class="card">
+            <div class="ico">📜</div>
+            <h3>JavaScript mods</h3>
+            <p>Drop a <code>.js</code> file in <code>mods/</code> — a sandboxed QuickJS runtime with an event and action API to react to the world and add commands.</p>
+          </div>
+          <div class="card">
+            <div class="ico">🧑‍🌾</div>
+            <h3>AI villagers (experimental)</h3>
+            <p>Opt in to give villagers LLM-driven personalities via Ollama, OpenAI, or Claude — right-click a villager and it chats back in character for its profession.</p>
+          </div>
+          <div class="card">
+            <div class="ico">🛰️</div>
+            <h3>Control API & Atlas panel</h3>
+            <p>HTTP + WebSocket endpoints for status, players, broadcast, kick, and set-block — driven by a live Atlas web admin dashboard.</p>
+          </div>
+          <div class="card">
+            <div class="ico">🔁</div>
+            <h3>Multi-version</h3>
+            <p>A bidirectional translation engine serves nine protocol versions across eleven MC releases, 1.18 through 1.20.4, from one native 763 core.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- architecture -->
+    <section class="block" id="architecture">
+      <div class="wrap">
+        <div class="eyebrow">Architecture</div>
+        <h2>Three layers, one Cargo workspace.</h2>
+        <div class="split">
+          <ul>
+            <li><span class="ck">✦</span><span><b>Engine — Rust (Tokio)</b> — the server itself: protocol, world, chunks, players, and the game loop. Focused crates that snap together.</span></li>
+            <li><span class="ck">✦</span><span><b>Mods — JavaScript via QuickJS</b> — drop-in <code>.js</code> mods (on <code>rquickjs</code>) that react to events and act on the world.</span></li>
+            <li><span class="ck">✦</span><span><b>Control panel — TypeScript + Bun on Atlas</b> — a live web admin UI that drives the engine's control API.</span></li>
+            <li><span class="ck">✦</span><span><b>Configuration</b> — everything lives in <code>cubeplane.toml</code> and is optional: port, gamemode, generator, seed, mods, and the control port.</span></li>
+            <li><span class="ck">✦</span><span><b>No external noise crates</b> — terrain, lighting, and the registry are all built in-house from authoritative Minecraft data.</span></li>
+          </ul>
+          <div class="diagram">         Minecraft Java 1.20.1 client
+                 │
+       TCP :25565 · protocol 763
+                 │
+        engine — Rust (Tokio)
+   protocol · world · mobs · gameplay
+                 │
+      ┌──────────┴───────────┐
+  QuickJS mods         control API
+   (mods/*.js)      HTTP + WS :8080
+                          │
+                  Atlas admin panel
+                   (Bun / TS)</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- get started -->
+    <section class="block" id="start">
+      <div class="wrap">
+        <div class="eyebrow">Get started</div>
+        <h2>Running in a few minutes.</h2>
+        <p class="sub">Requires Rust (Cargo) for the engine and Bun for the optional admin panel. Connect with Minecraft Java Edition 1.20.1.</p>
+        <div class="code" style="margin-top: 32px; max-width: 720px">
+          <div class="top">
+            <span>terminal</span>
+            <button class="copy" data-copy>Copy</button>
+          </div>
+          <pre data-code><span class="c"># 1. run the engine (reads ./cubeplane.toml)</span>
+cargo run --release
+<span class="c"># → cubeplane listening on 0.0.0.0:25565 — Minecraft 1.20.1 (protocol 763)</span>
+<span class="c"># → control API listening on http://127.0.0.1:8080</span>
+
+<span class="c"># 2. connect from Minecraft Java Edition 1.20.1 → server: localhost</span>
+
+<span class="c"># 3. launch the Atlas admin panel</span>
+cd admin
+bun install   <span class="c"># pulls Atlas from GitHub</span>
+bun run dev   <span class="c"># → http://localhost:3000</span></pre>
+        </div>
+        <p class="sub" style="margin-top: 28px">Write a mod by dropping a <code>.js</code> file in <code>mods/</code> and restarting:</p>
+        <div class="code" style="margin-top: 16px; max-width: 720px">
+          <div class="top">
+            <span>mods/welcome.js</span>
+            <button class="copy" data-copy>Copy</button>
+          </div>
+          <pre data-code>cubeplane.on("player_join", (e) =&gt; {
+  cubeplane.broadcast(e.player + " joined the cubeplane!");
+});
+
+cubeplane.command("tower", (ctx) =&gt; {
+  for (let i = 0; i &lt; 10; i++) cubeplane.setBlock(0, 4 + i, 0, "stone");
+});</pre>
+        </div>
+      </div>
+    </section>
+
+    <!-- cta band -->
+    <section class="band">
+      <div class="wrap">
+        <h2>Build your own Minecraft server.</h2>
+        <p>Open source under the MIT license. Run the engine, write mods in JavaScript, and drive it all from the Atlas panel.</p>
+        <div class="cta">
+          <a class="btn primary" href="docs.html">Read the docs</a>
+          <a class="btn ghost" href="https://github.com/wess/cubeplane">View on GitHub →</a>
+        </div>
+      </div>
+    </section>
+
+    <footer>
+      <div class="wrap">
+        <a class="brand" href="index.html"><span class="mark">⬛</span> cubeplane</a>
+        <div class="links">
+          <a href="docs.html">Docs</a>
+          <a href="../docs/MODDING.md">Modding</a>
+          <a href="../docs/ARCHITECTURE.md">Architecture</a>
+          <a href="https://github.com/wess/cubeplane">GitHub</a>
+        </div>
+        <span>MIT · © wess</span>
+      </div>
+    </footer>
+
+    <script src="app.js"></script>
+  </body>
+</html>
