@@ -33,6 +33,7 @@ mod recipe;
 mod registry;
 mod serverbound;
 mod sim;
+mod spawn;
 mod state;
 mod text;
 mod version;

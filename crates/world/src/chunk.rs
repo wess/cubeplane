@@ -80,6 +80,16 @@ impl Section {
         self.non_air == 0
     }
 
+    /// Set the (single) biome for this section.
+    pub fn set_biome(&mut self, biome: u16) {
+        self.biome = biome;
+    }
+
+    /// This section's biome id.
+    pub fn biome(&self) -> u16 {
+        self.biome
+    }
+
     /// Serialize this section as `[block count: short][block states][biomes]`.
     fn encode(&self, buf: &mut BytesMut) {
         buf.write_i16(self.non_air as i16);
@@ -217,6 +227,19 @@ impl Chunk {
             self.sections[s].set(x, ly, z, state);
             self.light = None; // invalidate cached lighting
         }
+    }
+
+    /// Stamp one biome across the whole column (every vertical section). The
+    /// overworld's biome is horizontal, so a single value per column is enough.
+    pub fn set_biome(&mut self, biome: u16) {
+        for s in &mut self.sections {
+            s.set_biome(biome);
+        }
+    }
+
+    /// The column's biome id (read from the lowest section; all share it).
+    pub fn biome(&self) -> u16 {
+        self.sections.first().map(Section::biome).unwrap_or(DEFAULT_BIOME)
     }
 
     fn section_of(&self, y: i32) -> Option<(usize, usize)> {

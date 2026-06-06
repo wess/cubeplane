@@ -421,12 +421,8 @@ where
     // Show the newcomer every mob already roaming the world.
     let ai_on = shared.ai_config().enabled;
     for m in shared.mobs() {
-        player.send(cb::spawn_entity(
-            m.entity_id, m.uuid, m.kind.type_id(), m.x, m.y, m.z, m.yaw, m.pitch, m.yaw, 0, (0, 0, 0),
-        ));
-        let meta = m.metadata();
-        if !meta.is_empty() {
-            player.send(cb::entity_metadata(m.entity_id, &meta));
+        for p in mobs::spawn_packets(&m) {
+            player.send(p);
         }
         if ai_on && m.kind.name() == "villager" {
             if let Some((name, prof)) = shared.villager_identity(m.entity_id) {
@@ -927,9 +923,9 @@ fn respawn_player(
     }
     let ai_on = shared.ai_config().enabled;
     for m in shared.mobs() {
-        player.send(cb::spawn_entity(
-            m.entity_id, m.uuid, m.kind.type_id(), m.x, m.y, m.z, m.yaw, m.pitch, m.yaw, 0, (0, 0, 0),
-        ));
+        for p in mobs::spawn_packets(&m) {
+            player.send(p);
+        }
         if ai_on && m.kind.name() == "villager" {
             if let Some((name, prof)) = shared.villager_identity(m.entity_id) {
                 player.send(cb::entity_custom_name(m.entity_id, &text::colored(format!("{name} the {prof}"), "green")));

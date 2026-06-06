@@ -8,6 +8,9 @@ Cargo.lock.orig
 /logs
 *.log
 
+# Bedrock bridge (ViaProxy + Geyser) — jars & runtime are downloaded by run.sh
+/bridge
+
 # Admin panel (Bun/Node)
 admin/node_modules
 admin/dist

@@ -86,25 +86,30 @@ fn dimension_registry() -> Nbt {
 }
 
 fn biome_registry() -> Nbt {
-    let effects = Nbt::compound()
-        .put_int("sky_color", 0x78A7FF)
-        .put_int("water_fog_color", 0x050533)
-        .put_int("fog_color", 0xC0D8FF)
-        .put_int("water_color", 0x3F76E4);
+    // Built straight off the world crate's biome table so the ids/names we
+    // advertise always match the ids generation stamps into chunks.
+    let entries = cubeplane_world::biome::BIOMES
+        .iter()
+        .map(|b| {
+            let effects = Nbt::compound()
+                .put_int("sky_color", b.sky_color)
+                .put_int("water_fog_color", cubeplane_world::biome::WATER_FOG_COLOR)
+                .put_int("fog_color", cubeplane_world::biome::FOG_COLOR)
+                .put_int("water_color", b.water_color);
+            let element = Nbt::compound()
+                .put_bool("has_precipitation", b.has_precipitation)
+                .put_float("temperature", b.temperature)
+                .put_float("downfall", b.downfall)
+                .put_compound("effects", effects);
+            Nbt::compound()
+                .put_string("name", b.name)
+                .put_int("id", b.id as i32)
+                .put_compound("element", element)
+                .into_value()
+        })
+        .collect();
 
-    let element = Nbt::compound()
-        .put_bool("has_precipitation", true)
-        .put_float("temperature", 0.8)
-        .put_float("downfall", 0.4)
-        .put_compound("effects", effects);
-
-    let entry = Nbt::compound()
-        .put_string("name", "minecraft:plains")
-        .put_int("id", 1)
-        .put_compound("element", element)
-        .into_value();
-
-    registry_wrapper("minecraft:worldgen/biome", vec![entry])
+    registry_wrapper("minecraft:worldgen/biome", entries)
 }
 
 fn chat_type_registry() -> Nbt {
@@ -154,5 +159,20 @@ mod tests {
         let bytes = codec().to_bytes_named("");
         // A complete codec is comfortably over a kilobyte.
         assert!(bytes.len() > 500, "codec unexpectedly small: {}", bytes.len());
+    }
+
+    #[test]
+    fn biome_registry_advertises_the_whole_world_table() {
+        // The codec must advertise every biome generation can stamp into a
+        // chunk; otherwise a chunk biome id would fail to resolve client-side.
+        let bytes = biome_registry().to_bytes_named("");
+        for b in cubeplane_world::biome::BIOMES {
+            let name: Vec<u8> = b.name.bytes().collect();
+            assert!(
+                bytes.windows(name.len()).any(|w| w == name),
+                "biome {} missing from registry codec",
+                b.name
+            );
+        }
     }
 }

@@ -87,6 +87,45 @@ impl TerrainGenerator {
         let h = self.base as f64 + (n1 * 0.75 + n2 * 0.25) * self.amplitude;
         h.round() as i32
     }
+
+    /// The biome of a column: water below sea level, a sandy beach at the shore,
+    /// windswept hills on high ground, otherwise a climate biome picked from
+    /// slow temperature and humidity fields (so like climates cluster).
+    fn biome_at(&self, wx: i32, wz: i32) -> u16 {
+        use crate::biome;
+        let surface = self.height_at(wx, wz);
+        if surface < self.sea_level {
+            return biome::OCEAN;
+        }
+        if surface <= self.sea_level + 2 {
+            return biome::BEACH;
+        }
+        if (surface as f64) > self.base as f64 + self.amplitude * 0.85 {
+            return biome::WINDSWEPT_HILLS;
+        }
+        let temp = value_noise(self.seed ^ 0x7E33, wx as f64 / 160.0, wz as f64 / 160.0);
+        let humidity = value_noise(self.seed ^ 0x5A17, wx as f64 / 200.0, wz as f64 / 200.0);
+        if temp < -0.45 {
+            if humidity > 0.0 { biome::SNOWY_TAIGA } else { biome::SNOWY_PLAINS }
+        } else if temp < 0.0 {
+            if humidity > 0.1 { biome::TAIGA } else { biome::PLAINS }
+        } else if temp > 0.55 {
+            if humidity > 0.3 {
+                biome::JUNGLE
+            } else if humidity < -0.1 {
+                biome::DESERT
+            } else {
+                biome::SAVANNA
+            }
+        } else if humidity > 0.5 {
+            biome::SWAMP
+        } else if humidity > 0.15 {
+            let birch = value_noise(self.seed ^ 0xB17C, wx as f64 / 90.0, wz as f64 / 90.0);
+            if birch > 0.2 { biome::BIRCH_FOREST } else { biome::FOREST }
+        } else {
+            biome::PLAINS
+        }
+    }
 }
 
 impl TerrainGenerator {
@@ -173,7 +212,10 @@ impl TerrainGenerator {
 
 impl Generator for TerrainGenerator {
     fn generate(&self, cx: i32, cz: i32) -> Chunk {
+        use crate::biome;
         let mut chunk = Chunk::new(cx, cz);
+        // One biome per chunk column, sampled at the centre.
+        chunk.set_biome(self.biome_at(cx * 16 + 8, cz * 16 + 8));
 
         // Resolve ore / surface block ids once per chunk (full registry lookup).
         let coal = block::state_by_name("coal_ore").unwrap_or(block::STONE);
@@ -187,8 +229,7 @@ impl Generator for TerrainGenerator {
                 let wx = cx * 16 + lx as i32;
                 let wz = cz * 16 + lz as i32;
                 let surface = self.height_at(wx, wz);
-                // A slow temperature field drives surface "biomes".
-                let temp = value_noise(self.seed ^ 0x7E33, wx as f64 / 160.0, wz as f64 / 160.0);
+                let col_biome = self.biome_at(wx, wz);
 
                 chunk.set_block(lx, MIN_Y, lz, block::BEDROCK);
                 for y in (MIN_Y + 1)..surface {
@@ -220,13 +261,15 @@ impl Generator for TerrainGenerator {
                     chunk.set_block(lx, y, lz, ore);
                 }
 
-                // Surface block: sand at the shore, snow when cold, else grass.
-                let top = if surface <= self.sea_level {
+                // Surface block follows the column's biome.
+                let top = if col_biome == biome::OCEAN
+                    || col_biome == biome::BEACH
+                    || col_biome == biome::DESERT
+                    || col_biome == biome::SAVANNA
+                {
                     block::SAND
-                } else if temp < -0.45 {
+                } else if biome::is_snowy(col_biome) {
                     snow
-                } else if temp > 0.5 {
-                    block::SAND
                 } else {
                     block::GRASS_BLOCK
                 };
@@ -237,12 +280,18 @@ impl Generator for TerrainGenerator {
                     chunk.set_block(lx, y, lz, block::WATER);
                 }
 
-                // Occasional natural tree on temperate grass (kept off chunk
-                // edges so the canopy isn't clipped).
+                // Trees, denser in forested biomes and absent from open ones.
+                // Kept off chunk edges so the canopy isn't clipped.
+                let tree_chance = match col_biome {
+                    biome::FOREST | biome::BIRCH_FOREST | biome::JUNGLE => 0.90,
+                    biome::TAIGA => 0.93,
+                    biome::PLAINS | biome::SWAMP => 0.992,
+                    _ => 2.0, // no trees (sand/snow biomes, hills)
+                };
                 if top == block::GRASS_BLOCK
                     && (2..14).contains(&lx)
                     && (2..14).contains(&lz)
-                    && hash_to_unit(self.seed ^ 0x7EEE, wx as i64, wz as i64) > 0.992
+                    && hash_to_unit(self.seed ^ 0x7EEE, wx as i64, wz as i64) > tree_chance
                 {
                     grow_tree(&mut chunk, lx, surface + 1, lz);
                 }
@@ -413,5 +462,24 @@ mod tests {
         for y in [MIN_Y, 0, 5, 30] {
             assert_eq!(c1.get_block(2, y, 3), c2.get_block(2, y, 3));
         }
+        // Biome assignment is deterministic and the chunk carries one.
+        assert_eq!(c1.biome(), c2.biome());
+    }
+
+    #[test]
+    fn generated_biomes_are_all_registered() {
+        // Sweep a wide area; every assigned biome must exist in the registry
+        // (so its id resolves in the codec the client receives) and more than
+        // one distinct biome must actually appear.
+        let g = TerrainGenerator::default();
+        let mut seen = std::collections::HashSet::new();
+        for cx in -8..8 {
+            for cz in -8..8 {
+                let b = g.biome_at(cx * 16 + 8, cz * 16 + 8);
+                assert!(crate::biome::BIOMES.iter().any(|d| d.id == b), "unregistered biome id {b}");
+                seen.insert(b);
+            }
+        }
+        assert!(seen.len() > 1, "terrain produced only one biome: {seen:?}");
     }
 }

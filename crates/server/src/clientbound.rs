@@ -641,6 +641,21 @@ pub fn entity_metadata(entity_id: i32, entries: &[Meta]) -> BytesMut {
     b
 }
 
+/// Update an entity's attributes (`(key, base_value)` pairs, no modifiers).
+/// Keys are the 1.20.1 attribute identifiers, e.g. `minecraft:generic.max_health`.
+/// Vanilla sends this on spawn; translating proxies rely on it for health/scale.
+pub fn update_attributes(entity_id: i32, attrs: &[(&str, f64)]) -> BytesMut {
+    let mut b = pkt(play_cb::UPDATE_ATTRIBUTES);
+    b.write_varint(entity_id);
+    b.write_varint(attrs.len() as i32);
+    for (key, value) in attrs {
+        b.write_string(key);
+        b.write_f64(*value);
+        b.write_varint(0); // modifier count
+    }
+    b
+}
+
 /// Give an entity a visible custom name (floating nameplate). Uses metadata
 /// index 2 (optional chat component) + index 3 (name visible bool).
 pub fn entity_custom_name(entity_id: i32, name: &Json) -> BytesMut {
@@ -858,4 +873,42 @@ pub fn tab_list_header(header: &Json, footer: &Json) -> BytesMut {
 /// Convert a degrees angle to the 1/256-of-a-turn byte the protocol uses.
 pub fn angle_to_byte(deg: f32) -> i8 {
     (((deg.rem_euclid(360.0)) / 360.0 * 256.0).round() as i64 & 0xFF) as i8
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cubeplane_protocol::ProtoRead;
+
+    #[test]
+    fn update_attributes_wire_layout() {
+        let mut buf = update_attributes(
+            7,
+            &[("minecraft:generic.max_health", 20.0), ("minecraft:generic.movement_speed", 0.23)],
+        );
+        // id varint, entity_id varint, property count varint,
+        // then per property: key string, value f64, modifier-count varint.
+        assert_eq!(buf.read_varint().unwrap(), play_cb::UPDATE_ATTRIBUTES);
+        assert_eq!(buf.read_varint().unwrap(), 7);
+        assert_eq!(buf.read_varint().unwrap(), 2);
+        assert_eq!(buf.read_string().unwrap(), "minecraft:generic.max_health");
+        assert_eq!(buf.read_f64().unwrap(), 20.0);
+        assert_eq!(buf.read_varint().unwrap(), 0);
+        assert_eq!(buf.read_string().unwrap(), "minecraft:generic.movement_speed");
+        assert_eq!(buf.read_f64().unwrap(), 0.23);
+        assert_eq!(buf.read_varint().unwrap(), 0);
+    }
+
+    #[test]
+    fn entity_metadata_is_never_empty_for_a_plain_mob() {
+        // A spawned mob must carry a metadata packet (vanilla always sends one);
+        // index 0 = shared entity flags, type 0 = byte, value 0, then 0xff end.
+        let mut buf = entity_metadata(7, &[Meta::Byte(0, 0)]);
+        assert_eq!(buf.read_varint().unwrap(), play_cb::ENTITY_METADATA);
+        assert_eq!(buf.read_varint().unwrap(), 7);
+        assert_eq!(buf.read_u8().unwrap(), 0); // index
+        assert_eq!(buf.read_varint().unwrap(), 0); // type = byte
+        assert_eq!(buf.read_u8().unwrap() as i8, 0); // value
+        assert_eq!(buf.read_u8().unwrap(), 0xff); // terminator
+    }
 }

@@ -77,6 +77,7 @@ pub mod play_cb {
     pub const SET_ACTION_BAR: i32 = 0x46;
     pub const ENTITY_METADATA: i32 = 0x52;
     pub const SET_EXPERIENCE: i32 = 0x56;
+    pub const UPDATE_ATTRIBUTES: i32 = 0x6a;
     pub const SET_TITLE_SUBTITLE: i32 = 0x5d;
     pub const SET_TITLE_TEXT: i32 = 0x5f;
     pub const SET_TITLE_TIME: i32 = 0x60;

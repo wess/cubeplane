@@ -403,46 +403,60 @@ fn step_mob(shared: &Arc<Shared>, players: &[Player], mob: &mut Mob, tick: u64) 
     shared.broadcast(cb::entity_head_rotation(mob.entity_id, mob.yaw));
 }
 
-/// Try to spawn one mob near a random player, on the surface. Hostiles only
-/// appear at night (and only if enabled in config).
+/// Try to spawn one mob near a random player. Picks a spawn category suited to
+/// the biome and environment at the candidate point, honours per-category caps,
+/// and draws a weighted mob from that biome's spawn list (see [`crate::spawn`]).
 fn try_spawn(shared: &Arc<Shared>, players: &[Player], is_night: bool) {
-    let cap = (players.len() * 8).min(40);
-    if shared.mob_count() >= cap {
-        return;
-    }
-    let allow_hostiles = is_night && shared.config.world.spawn_hostiles;
+    use crate::spawn::{self, Category};
 
     let mut rng = rand::thread_rng();
     let anchor = players[rng.gen_range(0..players.len())].state();
     let angle = rng.gen::<f64>() * TAU;
-    let radius = rng.gen_range(10.0..18.0);
+    let radius = rng.gen_range(12.0..32.0);
     let sx = anchor.x + angle.cos() * radius;
     let sz = anchor.z + angle.sin() * radius;
     let bx = sx.floor() as i32;
     let bz = sz.floor() as i32;
 
-    // Find an open surface column.
+    let biome_id = shared.world.lock().unwrap().biome_at(bx, bz);
+    let allow_hostiles = is_night && shared.config.world.spawn_hostiles;
+
+    // Choose a category appropriate to the environment.
+    let category = if cubeplane_world::biome::is_water(biome_id) {
+        if rng.gen_bool(0.85) { Category::WaterCreature } else { Category::WaterAmbient }
+    } else if allow_hostiles && rng.gen_bool(0.6) {
+        Category::Monster
+    } else if rng.gen_bool(0.15) {
+        Category::Ambient
+    } else {
+        Category::Creature
+    };
+
+    // Respect the per-category population cap.
+    let live = shared.mobs();
+    let current = live.iter().filter(|m| spawn::category_of(m.kind.name()) == category).count();
+    if current >= spawn::cap(category, players.len()) {
+        return;
+    }
+
+    // Draw a weighted, biome-appropriate mob.
+    let Some(name) = spawn::pick(spawn::list(biome_id, category), &mut rng) else {
+        return;
+    };
+    let Some(kind) = MobKind::from_name(name) else {
+        return;
+    };
+
+    // Find a valid Y for the environment (water column vs solid surface).
+    let in_water = matches!(category, Category::WaterCreature | Category::WaterAmbient);
     let spawn_y = {
         let mut world = shared.world.lock().unwrap();
-        let top = (anchor.y as i32 + 24).min(cubeplane_world::chunk::MIN_Y + cubeplane_world::chunk::WORLD_HEIGHT - 3);
-        let mut found = None;
-        for y in (cubeplane_world::chunk::MIN_Y + 1..top).rev() {
-            let ground = !block::is_air(world.get_block(bx, y, bz));
-            let head_clear = block::is_air(world.get_block(bx, y + 1, bz))
-                && block::is_air(world.get_block(bx, y + 2, bz));
-            if ground && head_clear {
-                found = Some(y + 1);
-                break;
-            }
-        }
-        found
+        find_spawn_y(&mut world, bx, bz, anchor.y as i32, in_water)
     };
     let Some(y) = spawn_y else {
         return;
     };
 
-    // Pick a kind; restrict to passive animals when hostiles aren't allowed.
-    let kind = MobKind::random(&mut rng, !allow_hostiles);
     let entity_id = shared.next_entity_id();
     let heading = rng.gen::<f32>() * std::f32::consts::TAU;
     let mut mob = Mob::new(entity_id, kind, sx, y as f64, sz, heading);
@@ -450,27 +464,52 @@ fn try_spawn(shared: &Arc<Shared>, players: &[Player], is_night: bool) {
         mob.variant = rng.gen_range(0..16);
     }
 
-    shared.broadcast(cb::spawn_entity(
-        entity_id,
-        mob.uuid,
-        kind.type_id(),
-        mob.x,
-        mob.y,
-        mob.z,
-        mob.yaw,
-        mob.pitch,
-        mob.yaw,
-        0,
-        (0, 0, 0),
-    ));
-    let meta = mob.metadata();
-    if !meta.is_empty() {
-        shared.broadcast(cb::entity_metadata(entity_id, &meta));
+    for p in spawn_packets(&mob) {
+        shared.broadcast(p);
     }
     shared.add_mob(mob);
     if kind.name() == "villager" {
         villager_spawned(shared, entity_id);
     }
+}
+
+/// Find a spawn Y at `(bx, bz)`, searching downward from near the anchor. Water
+/// mobs want the topmost water block; land mobs want solid ground (not water)
+/// with two air blocks of headroom.
+fn find_spawn_y(world: &mut cubeplane_world::World, bx: i32, bz: i32, near_y: i32, in_water: bool) -> Option<i32> {
+    use cubeplane_world::chunk::{MIN_Y, WORLD_HEIGHT};
+    let top = (near_y + 24).min(MIN_Y + WORLD_HEIGHT - 3);
+    for y in (MIN_Y + 1..top).rev() {
+        let here = world.get_block(bx, y, bz);
+        if in_water {
+            if here == block::WATER {
+                return Some(y);
+            }
+        } else {
+            let ground = !block::is_air(here) && here != block::WATER;
+            let head_clear = block::is_air(world.get_block(bx, y + 1, bz))
+                && block::is_air(world.get_block(bx, y + 2, bz));
+            if ground && head_clear {
+                return Some(y + 1);
+            }
+        }
+    }
+    None
+}
+
+/// The clientbound packets that introduce a mob to a client: the add-entity
+/// packet, its full metadata, and its attributes. Vanilla sends all three on
+/// spawn; emitting them keeps translating proxies (Geyser/ViaVersion) rendering
+/// the correct entity and size instead of falling back to a default.
+pub fn spawn_packets(mob: &Mob) -> [bytes::BytesMut; 3] {
+    [
+        cb::spawn_entity(
+            mob.entity_id, mob.uuid, mob.kind.type_id(),
+            mob.x, mob.y, mob.z, mob.yaw, mob.pitch, mob.yaw, 0, (0, 0, 0),
+        ),
+        cb::entity_metadata(mob.entity_id, &mob.metadata()),
+        cb::update_attributes(mob.entity_id, &mob.attributes()),
+    ]
 }
 
 /// Spawn a baby animal (from breeding) at a position.
@@ -480,12 +519,8 @@ fn spawn_baby(shared: &Arc<Shared>, kind: MobKind, x: f64, y: f64, z: f64) {
     let mut mob = Mob::new(entity_id, kind, x, y, z, heading);
     mob.baby = true;
     mob.baby_age = 24_000; // ~20 minutes to grow up, as in vanilla
-    shared.broadcast(cb::spawn_entity(
-        entity_id, mob.uuid, kind.type_id(), x, y, z, mob.yaw, mob.pitch, mob.yaw, 0, (0, 0, 0),
-    ));
-    let meta = mob.metadata();
-    if !meta.is_empty() {
-        shared.broadcast(cb::entity_metadata(entity_id, &meta));
+    for p in spawn_packets(&mob) {
+        shared.broadcast(p);
     }
     shared.add_mob(mob);
 }
@@ -495,9 +530,9 @@ pub fn summon(shared: &Arc<Shared>, kind: MobKind, x: f64, y: f64, z: f64) {
     let entity_id = shared.next_entity_id();
     let heading = rand::thread_rng().gen::<f32>() * std::f32::consts::TAU;
     let mob = Mob::new(entity_id, kind, x, y, z, heading);
-    shared.broadcast(cb::spawn_entity(
-        entity_id, mob.uuid, kind.type_id(), mob.x, mob.y, mob.z, mob.yaw, mob.pitch, mob.yaw, 0, (0, 0, 0),
-    ));
+    for p in spawn_packets(&mob) {
+        shared.broadcast(p);
+    }
     shared.add_mob(mob);
     if kind.name() == "villager" {
         villager_spawned(shared, entity_id);

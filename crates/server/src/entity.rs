@@ -91,16 +91,6 @@ impl MobKind {
             .position(|m| m.name == key)
             .map(MobKind)
     }
-
-    /// A random mob kind, optionally restricted to passive animals.
-    pub fn random(rng: &mut impl rand::Rng, passive_only: bool) -> MobKind {
-        loop {
-            let i = rng.gen_range(0..crate::mobs_table::MOBS.len());
-            if !passive_only || !crate::mobs_table::MOBS[i].hostile {
-                return MobKind(i);
-            }
-        }
-    }
 }
 
 /// A dropped item lying in the world, awaiting pickup.
@@ -210,8 +200,11 @@ impl Mob {
     }
 
     /// Cosmetic metadata for this mob (baby flag, sheep wool colour, …).
+    /// Always carries the shared entity-flags byte so the packet is non-empty —
+    /// vanilla sends metadata for every spawned entity, and translating proxies
+    /// (Geyser/ViaVersion) need it to render the entity rather than a default.
     pub fn metadata(&self) -> Vec<crate::clientbound::Meta> {
-        let mut m = Vec::new();
+        let mut m = vec![crate::clientbound::Meta::Byte(0, 0)]; // shared flags: none
         if self.baby {
             m.push(crate::clientbound::Meta::Bool(16, true)); // ageable: is baby
         }
@@ -221,6 +214,15 @@ impl Mob {
             m.push(crate::clientbound::Meta::Byte(17, byte as i8));
         }
         m
+    }
+
+    /// Attribute base values vanilla sends for this mob on spawn: max health and
+    /// movement speed. Proxies use these to size and animate the entity.
+    pub fn attributes(&self) -> Vec<(&'static str, f64)> {
+        vec![
+            ("minecraft:generic.max_health", self.kind.max_health() as f64),
+            ("minecraft:generic.movement_speed", self.kind.speed()),
+        ]
     }
 
     /// Whether the mob is alive (not in its death animation).

@@ -4,6 +4,7 @@
 //! generates chunks through a pluggable [`Generator`] and exposes global
 //! block get/set in world coordinates, which the server and mod API build on.
 
+pub mod biome;
 pub mod block;
 pub mod blocks_table;
 pub mod chunk;
@@ -155,6 +156,12 @@ impl World {
     pub fn get_block(&mut self, x: i32, y: i32, z: i32) -> StateId {
         let (cx, cz, lx, lz) = world_to_chunk(x, z);
         self.chunk(cx, cz).get_block(lx, y, lz)
+    }
+
+    /// The biome id at world coordinates, generating the chunk if needed.
+    pub fn biome_at(&mut self, x: i32, z: i32) -> u16 {
+        let (cx, cz, _, _) = world_to_chunk(x, z);
+        self.chunk(cx, cz).biome()
     }
 
     /// Place a block at world coordinates, generating the chunk if needed.

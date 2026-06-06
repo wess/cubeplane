@@ -62,10 +62,8 @@ pub fn tick(shared: &Arc<Shared>) {
         for e in &active {
             match e.id {
                 REGENERATION => combat::heal(&player, 1.0 + e.amplifier.max(0) as f32),
-                POISON => {
-                    if player.state().health > 1.0 {
-                        combat::damage_player(shared, &player, 1.0, "succumbed to poison");
-                    }
+                POISON if player.state().health > 1.0 => {
+                    combat::damage_player(shared, &player, 1.0, "succumbed to poison");
                 }
                 _ => {}
             }
